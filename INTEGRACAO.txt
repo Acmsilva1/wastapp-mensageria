@@ -1,0 +1,49 @@
+COMO INTEGRAR AO SUPER APP OU JARVIS
+
+O QUE ESTA FUNCIONANDO AGORA
+Painel local na porta 3337 com QR Code e estado da conexao whatsapp-web.js.
+Nao existem endpoints de envio nem handlers de conversas neste teste.
+O numero utilizado e o da conta que escanear o QR Code.
+
+SUPER APP - PONTOS CONFERIDOS NO CHECKOUT
+O projeto possui backend Node.js e rotas de Telegram:
+api/telegram-webhook.js -> lib/telegramWater.js e lib/telegramPurchase.js.
+api/saude-alertas-cron.js -> fluxo de alertas de saude.
+A integracao futura deve compartilhar as regras de negocio, adaptando apenas
+o canal de entrada/saida. Nao reimplemente as regras de dieta e compras.
+Nenhum arquivo do Super App foi alterado neste teste.
+
+FLUXO DE SAIDA
+1. O backend do Super App identifica um alerta e seu usuario/destinatario.
+2. Chama uma API privada do servico WhatsApp com autenticacao de servidor.
+3. O servico confere permissao, destinatario autorizado e evita duplicidade.
+4. Uma sessao Baileys conectada envia o texto.
+5. O servico devolve o resultado; o app registra o envio ou a falha.
+
+Dentro do processo Node.js que possui o socket conectado, o envio usa:
+  await socket.sendMessage(jidAutorizado, { text: textoDoAlerta });
+O identificador deve vir do mapeamento validado do contato/conta.
+Nunca coloque o token do servico nem as credenciais WhatsApp no frontend.
+Esse trecho e ilustrativo: o painel atual nao expoe envio.
+
+FLUXO DE ENTRADA PARA JARVIS
+WhatsApp -> evento messages.upsert -> filtro de mensagens novas e remetentes
+permitidos -> comando para o backend do Jarvis -> resposta pelo socket.
+Filtre mensagens proprias, antigas e repetidas para evitar loops.
+Comandos com efeitos externos devem manter as confirmacoes do Jarvis.
+A estrutura real do projeto Jarvis nao foi localizada nem alterada aqui.
+
+ONDE HOSPEDAR
+O processo Baileys precisa manter uma conexao e credenciais persistentes.
+No teste, ele roda neste computador. Para disponibilidade continua, use um
+backend com processo duradouro e disco persistente, por exemplo uma VPS.
+Se o frontend/API estiver em funcoes de curta duracao, mantenha este servico
+separado e chame sua API privada pelo backend.
+Um app hospedado remotamente nao consegue acessar o 127.0.0.1 deste PC.
+
+PROXIMA IMPLEMENTACAO
+Escolher o projeto e um fluxo, por exemplo alertas de dieta para seu numero.
+Adicionar autenticacao entre servicos, mapeamento de destinatarios,
+controle de duplicidade, fila/retry e armazenamento adequado da sessao.
+Depois validar um envio explicitamente autorizado pelo usuario.
+

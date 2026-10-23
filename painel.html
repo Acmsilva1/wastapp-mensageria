@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="pt-BR">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>WhatsApp · Conexão local</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#eef3f2;color:#153c34;font:16px/1.6 system-ui,sans-serif}main{max-width:1000px;margin:48px auto;padding:0 24px}header small{color:#547268;text-transform:uppercase;letter-spacing:2px}h1{font-size:34px;margin:6px 0}h2{font-size:20px;margin-top:0}.grid{display:grid;grid-template-columns:minmax(450px,1.2fr) 1fr;gap:24px;margin-top:28px}.card{background:white;border:1px solid #dae5e0;border-radius:20px;padding:28px}.badge{display:inline-block;background:#e8eeec;color:#3f5b52;border-radius:30px;padding:5px 12px;font-size:14px}.badge.ok{background:#d7f5e4;color:#086236}#qr{display:block;width:min(400px,100%);image-rendering:pixelated;margin:22px auto}#qr[hidden]{display:none}.muted{color:#5d726b;font-size:14px}code{background:#eef3f2;padding:3px 6px;border-radius:5px}li{margin-bottom:8px}.flow{background:#eef5f2;padding:16px;border-radius:12px}footer{margin-top:24px;color:#5d726b;font-size:13px}@media(max-width:900px){.grid{grid-template-columns:1fr}main{margin:24px auto}h1{font-size:28px}}
+</style>
+<main>
+<header><small>Teste pessoal · whatsapp-web.js</small><h1>Conecte seu WhatsApp</h1><p>Vincule sua conta como um aparelho conectado. Você continua usando o WhatsApp no celular.</p></header>
+<div class="grid">
+<section class="card"><h2>Conexão</h2><span id="state" class="badge" role="status">Iniciando…</span><p id="detail">Consultando o serviço local…</p><img id="qr" alt="QR Code para conectar o WhatsApp" hidden><p id="account"></p><ol><li>Abra o WhatsApp no celular.</li><li>Entre em <strong>Aparelhos conectados → Conectar aparelho</strong>.</li><li>Aponte a câmera para o QR Code desta página.</li></ol><p class="muted">O QR se atualiza automaticamente. Não compartilhe capturas dele. Para revogar o acesso, desconecte este aparelho pelo WhatsApp do celular.</p></section>
+<section class="card"><h2>Como entra no seu projeto</h2><div class="flow">Super App ou Jarvis<br>↓ backend autenticado<br>Serviço WhatsApp em Node.js<br>↓ sessão vinculada por QR<br>WhatsApp do número conectado</div><p><strong>Super App:</strong> um alerta de dieta ou financeiro pode chamar esse serviço e solicitar uma mensagem para o destinatário autorizado.</p><p><strong>Jarvis:</strong> o serviço pode receber um comando, conferir quem enviou e encaminhar ao assistente. O resultado volta pela mesma conexão.</p><p class="muted">Este teste valida apenas o pareamento. Envio de mensagens, leitura de conversas e integração aos projetos ainda não foram implementados.</p></section>
+</div><footer>Serviço acessível somente neste computador · sessão salva localmente · mantenha o processo ligado durante o teste.</footer>
+</main>
+<script>
+const labels={starting:'Iniciando',connecting:'Conectando',qr:'Aguardando QR Code',connected:'Conectado',logged_out:'Sessão encerrada',error:'Falha na conexão'};
+async function update(){try{const response=await fetch('/api/status',{headers:{'X-Local-Panel':'1'},cache:'no-store'});if(!response.ok)throw Error();const data=await response.json();document.querySelector('#state').textContent=labels[data.state]||data.state;document.querySelector('#state').className='badge'+(data.state==='connected'?' ok':'');document.querySelector('#detail').textContent=data.detail;const qr=document.querySelector('#qr');qr.hidden=!data.qr;if(data.qr&&qr.src!==data.qr)qr.src=data.qr;if(!data.qr)qr.removeAttribute('src');document.querySelector('#account').textContent=data.account?'Conta: '+data.account:'';}catch{document.querySelector('#state').textContent='Serviço indisponível';document.querySelector('#detail').textContent='Verifique se o servidor local está rodando.';document.querySelector('#qr').hidden=true;document.querySelector('#account').textContent='';}finally{setTimeout(update,2000)}}update();
+</script>
+</html>
+

@@ -1,0 +1,13 @@
+.git/
+node_modules/
+.auth-baileys/
+.wwebjs_auth/
+.wwebjs_cache/
+.browsers/
+.env
+.env.*
+!.env.example
+*.log
+.runtime/
+*.zip
+.env.local

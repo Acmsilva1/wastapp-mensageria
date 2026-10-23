@@ -1,0 +1,48 @@
+FRAMEWORKS WHATSAPP - USO LOCAL
+
+Pacotes: @whiskeysockets/baileys 7.0.0-rc14 e whatsapp-web.js 1.34.7.
+Baileys 7 e uma versao de pre-lancamento (release candidate).
+
+COMO CONECTAR
+1. Abra o PowerShell nesta pasta.
+2. Escolha UM comando:
+   npm.cmd run baileys
+   npm.cmd run webjs
+3. No celular: WhatsApp > Aparelhos conectados > Conectar aparelho.
+4. Escaneie o QR Code mostrado no terminal.
+5. Use Ctrl+C para parar o programa.
+
+Os exemplos somente conectam. Nao enviam mensagens nem imprimem conversas.
+A conexao real depende de voce escanear o QR; instalar nao conecta a conta.
+Cada biblioteca mantem sua propria sessao local. Nao e necessario iniciar ambas.
+
+USO NO SEU PROJETO
+Estas bibliotecas rodam no backend Node.js. Nao coloque a sessao nem estas
+bibliotecas no frontend React/Vite ou em codigo publico do navegador.
+Esta pasta e uma base independente; seu projeto pessoal ainda nao foi alterado.
+Para integrar, escolha uma biblioteca e adapte o arquivo de entrada ao backend.
+O navegador usado pelo whatsapp-web.js fica na subpasta .browsers.
+Mantenha esta pasta ao mover a base, junto com os demais arquivos.
+
+SESSOES
+.auth-baileys e .wwebjs_auth guardam acesso a conta. Nao compartilhe nem publique.
+.gitignore ja exclui sessoes, caches e dependencias.
+Para revogar o acesso, desconecte o aparelho pelo WhatsApp no celular.
+O armazenamento em arquivos do exemplo Baileys serve para experimentacao local.
+Para producao, implemente armazenamento de credenciais apropriado ao backend.
+
+FONTES DOS PROJETOS
+https://github.com/WhiskeySockets/Baileys
+https://wwebjs.dev/guide/
+
+Ambas sao bibliotecas nao oficiais do WhatsApp. Os projetos alertam para risco
+de bloqueio da conta. Para integracao oficial, avalie a WhatsApp Business Platform.
+
+PAINEL LOCAL
+Iniciar: npm.cmd run painel
+Abrir: http://127.0.0.1:3337
+O painel usa whatsapp-web.js e compartilha a sessao do exemplo webjs.cjs.
+Execute apenas um deles de cada vez.
+O servico escuta somente 127.0.0.1, sem exposicao na rede local.
+Para parar, use Ctrl+C no terminal que iniciou o processo.
+
