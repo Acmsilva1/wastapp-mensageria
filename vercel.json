@@ -7,7 +7,7 @@
   "daemons": {
     "whatsapp": {
       "root": ".",
-      "entrypoint": "worker/Dockerfile",
+      "entrypoint": "Dockerfile.whatsapp",
       "instances": { "iad1": 1 },
       "terminationGracePeriodSeconds": 50
     }

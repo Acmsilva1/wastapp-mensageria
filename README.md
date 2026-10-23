@@ -96,7 +96,7 @@ O snapshot criptografado tem limite de 128 MiB. Monitore o espaco do banco.
 2. Importe `Acmsilva1/wastapp-mensageria` como projeto independente.
 3. Root Directory: raiz do repositorio, sem subpasta. Node.js: 24.x. Framework: Other.
 4. `vercel.json` define build `npm run build`, saida estatica `public`, uma Function
-   `api/control.mjs` e um Daemon `whatsapp` usando `worker/Dockerfile`, com uma instancia.
+   `api/control.mjs` e um Daemon `whatsapp` usando `Dockerfile.whatsapp`, com uma instancia.
 5. Configure as variaveis e confirme o APP_ORIGIN com o dominio atribuido ao projeto.
    Alteracoes de variaveis exigem novo deploy.
 6. Publique em Production: Daemons nao rodam nos previews durante a beta.
@@ -189,7 +189,7 @@ npm.cmd run worker:local
 Validar container (Docker Desktop Linux precisa estar iniciado):
 
 ```powershell
-docker build -f worker/Dockerfile -t whatsapp-mensageria-worker .
+docker build -f Dockerfile.whatsapp -t whatsapp-mensageria-worker .
 docker run --rm --env-file .env.local whatsapp-mensageria-worker
 ```
 
