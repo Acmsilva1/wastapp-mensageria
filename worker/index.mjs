@@ -1,3 +1,4 @@
+import { logFailure } from '../lib/diagnostics.mjs';
 import { randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { createRequire } from 'node:module';
@@ -135,7 +136,7 @@ async function run() {
   }
 }
 run().catch(async error => {
-  if (error.name !== 'AbortError') console.error('worker_start_failed');
+  if (error.name !== 'AbortError') logFailure('worker_start_failed', error);
   await close('worker_failure');
   process.exit(error.name === 'AbortError' ? 0 : 1);
 });
