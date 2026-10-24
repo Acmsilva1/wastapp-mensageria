@@ -17,18 +17,38 @@ export function catalogGroups(chats) {
   }
   return [...groups.values()];
 }
-export async function recipientAddress(client, _repo, recipient) {
+const lookupFailures = new Set(['group_lookup_timeout', 'group_lookup_failed']);
+async function confirmLiveGroup(client, groupId) {
+  let chat;
+  try { chat = await metadataLookup(() => client.getChatById(groupId)); }
+  catch (error) { throw new Error(error.message === 'group_lookup_timeout' ? 'group_lookup_timeout' : 'group_lookup_failed'); }
+  if (!chat) throw new Error('group_lookup_failed');
+  if (!chat.isGroup || chat.id?._serialized !== groupId) throw new Error('group_unavailable');
+  if (chat.isReadOnly) throw new Error('group_read_only');
+  return groupId;
+}
+async function savedGroupId(repo, groupId) {
+  try {
+    const saved = typeof repo?.groups === 'function' ? await repo.groups() : [];
+    return Array.isArray(saved) && saved.some(group => group.id === groupId) ? groupId : null;
+  } catch { return null; }
+}
+export async function recipientAddress(client, repo, recipient) {
   if (recipient.target_type !== 'group') {
     const number = await client.getNumberId(recipient.phone.slice(1));
     if (!number) throw new Error('number_not_registered');
     return number._serialized;
   }
-  let chat;
-  try { chat = await metadataLookup(() => client.getChatById(recipient.group_id)); }
-  catch (error) { throw new Error(error.message === 'group_lookup_timeout' ? 'group_lookup_timeout' : 'group_unavailable'); }
-  if (!chat?.isGroup || chat.id?._serialized !== recipient.group_id) throw new Error('group_unavailable');
-  if (chat.isReadOnly) throw new Error('group_read_only');
-  return recipient.group_id;
+  let lookupFailed = false;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try { return await confirmLiveGroup(client, recipient.group_id); }
+    catch (error) {
+      if (!lookupFailures.has(error.message)) throw error;
+      lookupFailed = true;
+    }
+  }
+  if (lookupFailed) return await savedGroupId(repo, recipient.group_id) || recipient.group_id;
+  throw new Error('group_unavailable');
 }
 
 // Executado no contexto do Chromium: somente metadados locais, sem serializar conversas.

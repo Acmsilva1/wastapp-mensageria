@@ -72,7 +72,22 @@ test('worker valida grupo ao vivo, permissao e catalogo antes de obter destino',
  assert.equal(await recipientAddress(client,{groups:async()=>[]},input()),groupId); assert.equal(lookups,2);
  await assert.rejects(recipientAddress({...client,getChatById:async()=>({isGroup:false})},list,input()),/group_unavailable/);
  await assert.rejects(recipientAddress({...client,getChatById:async()=>({isGroup:true,isReadOnly:true,id:{_serialized:groupId}})},list,input()),/group_read_only/);
- await assert.rejects(recipientAddress({...client,getChatById:async()=>{throw Error('private detail');}},list,input()),/group_unavailable/);
+ let failedLookups=0;
+ assert.equal(await recipientAddress({getChatById:async()=>{failedLookups++;throw Error('private detail');}},list,input()),groupId);
+ assert.equal(failedLookups,2);
+});
+
+test('perfil com numero desativado envia so ao grupo mesmo se a consulta ao vivo falhar',async()=>{
+ await reset(); const w=await connected(); await repo.syncGroups(w,[{id:groupId,name:'Grupo'}]);
+ const phone=await repo.saveRecipient(recipientInput({name:'Pessoa',phone:'+5511900000000',audience:'1',events:['health.water_progress']}));
+ await repo.saveRecipient(input()); await repo.toggleRecipient(phone.id,false);
+ const queued=await repo.enqueue(alertInput({source:'superapp',audience:'1',event_type:'health.water_progress',idempotency_key:'so-grupo',title:'Teste',message:'Nao enviar'}));
+ assert.equal(queued.jobs.length,1);
+ const claimed=await repo.claim(w);
+ assert.equal(claimed.target_type,'group'); assert.equal(claimed.group_id,groupId);
+ let lookups=0;
+ assert.equal(await recipientAddress({getChatById:async()=>{lookups++;throw Error('chat ausente');}},repo,claimed),groupId);
+ assert.equal(lookups,2);
 });
 
 test('consulta de metadados tem prazo e nao bloqueia indefinidamente os envios',async()=>{
