@@ -69,7 +69,7 @@ test('worker valida grupo ao vivo, permissao e catalogo antes de obter destino',
  const list={groups:async()=>[{id:groupId,name:'Grupo'}]};
  assert.equal(await recipientAddress(client,list,input()),groupId);
  assert.equal(await recipientAddress(client,list,{phone:'+5511900000000'}),'5511900000000@c.us');
- await assert.rejects(recipientAddress(client,{groups:async()=>[]},input()),/group_unavailable/); assert.equal(lookups,1);
+ assert.equal(await recipientAddress(client,{groups:async()=>[]},input()),groupId); assert.equal(lookups,2);
  await assert.rejects(recipientAddress({...client,getChatById:async()=>({isGroup:false})},list,input()),/group_unavailable/);
  await assert.rejects(recipientAddress({...client,getChatById:async()=>({isGroup:true,isReadOnly:true,id:{_serialized:groupId}})},list,input()),/group_read_only/);
  await assert.rejects(recipientAddress({...client,getChatById:async()=>{throw Error('private detail');}},list,input()),/group_unavailable/);

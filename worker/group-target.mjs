@@ -17,13 +17,12 @@ export function catalogGroups(chats) {
   }
   return [...groups.values()];
 }
-export async function recipientAddress(client, repo, recipient) {
+export async function recipientAddress(client, _repo, recipient) {
   if (recipient.target_type !== 'group') {
     const number = await client.getNumberId(recipient.phone.slice(1));
     if (!number) throw new Error('number_not_registered');
     return number._serialized;
   }
-  if (!(await repo.groups()).some(g => g.id === recipient.group_id)) throw new Error('group_unavailable');
   let chat;
   try { chat = await metadataLookup(() => client.getChatById(recipient.group_id)); }
   catch (error) { throw new Error(error.message === 'group_lookup_timeout' ? 'group_lookup_timeout' : 'group_unavailable'); }

@@ -143,7 +143,6 @@ async function run() {
     const phone = client.info?.wid?.user;
     await repo.state(worker, 'connected', client.info?.pushname || 'WhatsApp', phone ? `+${phone}` : null);
     await repo.log(worker, 'connected');
-    try { await syncGroups(); } catch { await repo.log(worker, 'group_catalog_failed', 'group_catalog_failed'); }
     ready = true;
   }));
   client.on('remote_session_saved', safeEvent(async () => { await repo.log(worker, 'session_saved'); }));
@@ -161,11 +160,11 @@ async function run() {
   while (!stopping) {
     if (Date.now() - cleanedAt > 3600000) { await repo.cleanup(); cleanedAt = Date.now(); }
     if (ready) {
+      const job = await repo.claim(worker);
+      if (job) { activeSend = deliver(job); await activeSend; activeSend = null; await sleep(2000); continue; }
       if (Date.now() - groupsSyncedAt > 60000 || await repo.pendingGroupRefresh(worker)) {
         try { await syncGroups(); } catch { groupsSyncedAt = Date.now(); await repo.log(worker, 'group_catalog_failed', 'group_catalog_failed'); }
       }
-      const job = await repo.claim(worker);
-      if (job) { activeSend = deliver(job); await activeSend; activeSend = null; await sleep(2000); continue; }
     }
     await sleep(3000, undefined, { signal: abort.signal });
   }
