@@ -204,3 +204,26 @@ deste novo worker. Nao executar instancias concorrentes da mesma sessao.
 - https://wwebjs.dev/guide/creating-your-bot/authentication.html
 
 whatsapp-web.js e Baileys sao bibliotecas nao oficiais do WhatsApp.
+
+
+## Gerar novo QR ou trocar o remetente
+
+Execute manualmente `migrations/002_pairing_reset.sql` no SQL Editor do banco da mensageria antes de publicar esta versão. A migration adiciona apenas dois controles à conexão, sem apagar dados. Não foi executada no banco real.
+
+Entre no painel e use **Gerar novo QR**. Confirme a troca e aguarde o daemon reiniciar; escaneie pelo WhatsApp → Aparelhos conectados → Conectar aparelho. A ação encerra a sessão deste serviço, remove somente o backup de pareamento dessa conta e mantém destinatários, fila e histórico. O número remetente é o número que escaneia o QR; não precisa cadastrá-lo como destinatário se não receberá alertas.
+
+A API registra o comando no PostgreSQL e o worker o consulta a cada três segundos, inclusive durante a inicialização do navegador. Se o daemon estiver parado, o pedido continua pendente até ele iniciar; atualizar a página não inicia o daemon. O logout detectado no celular solicita novo pareamento automaticamente; desconexões transitórias preservam o backup. **Sair** no cabeçalho encerra apenas a sessão administrativa. O novo QR exige worker ativo, banco disponível e Chromium funcionando.
+
+Após desconexão confirmada pelo celular, o pareamento é reiniciado automaticamente e os códigos são renovados sem limite de tentativas até alguém conectar. Um watchdog reinicia a tentativa se o QR parar de atualizar por 90 segundos; ele não atua em uma conta autenticada/conectada. QR vencido não é exibido.
+
+## Destinatarios em grupos
+
+Antes de publicar, execute manualmente as migrations 002_pairing_reset.sql e 003_group_recipients.sql no banco da mensageria, nessa ordem. Nao foram executadas no banco real.
+
+Conecte seu WhatsApp no painel. Em Adicionar destinatario, escolha Grupo do WhatsApp e selecione pelo nome o grupo criado. O worker consulta os grupos da conta conectada e guarda somente ID/nome, sem conteudo das conversas. A lista e atualizada ao conectar e aproximadamente a cada minuto; Atualizar grupos recarrega o catalogo do servidor. Nao e necessario copiar ID ou informar numeros dos participantes.
+
+Cadastre o mesmo grupo uma vez para cada perfil que deve enviar alertas para ele; escolha os eventos de cada cadastro. O Financeiro usa WHATSAPP_FINANCE_PROFILE_ID do Super App. Se quiser somente o grupo, desative os destinatarios individuais antigos para esses perfis. O Super App continua usando a mesma API e o mesmo audience, sem nova Function nem variavel de grupo.
+
+Todos os participantes do grupo podem ver os alertas enviados. A entrega confere se o grupo pertence ao catalogo da sessao atual e consulta novamente o chat antes do envio. Grupo indisponivel ou sem permissao de publicar resulta em erro no historico, sem redirecionar a mensagem para um numero individual.
+
+O rollback 003 recusa execucao enquanto houver destinatarios grupo, preservando os registros e seu historico. Testes locais nao comprovam pareamento ou entrega reais.
