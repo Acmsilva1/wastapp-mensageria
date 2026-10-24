@@ -88,9 +88,38 @@ test('API grupos exige cookie admin e retorna somente metadados da conexao ativa
  try{
   assert.equal((await fetch(url)).status,401);
   assert.equal((await fetch(url,{headers:{Authorization:'Bearer '+env.INTEGRATION_TOKEN}})).status,401);
-  const res=await fetch(url,{headers:{Cookie:'wm_session='+makeSession(env.ADMIN_TOKEN)}});
-  assert.equal(res.status,200);assert.deepEqual(await res.json(),{groups:[{id:groupId,name:'Grupo'}]});
+  const headers={Cookie:'wm_session='+makeSession(env.ADMIN_TOKEN)};
+  const res=await fetch(url,{headers});
+  assert.equal(res.status,200);
+  const body=await res.json();
+  assert.deepEqual(body.groups,[{id:groupId,name:'Grupo'}]);
+  assert.equal(body.catalog.status,'ready');
+  assert.equal(body.catalog.error,null);
+  assert.ok(body.catalog.updated_at);
+  const refresh=await fetch(url.replace('action=groups','action=groups-refresh'),{method:'POST',headers:{...headers,Origin:env.APP_ORIGIN,'X-Panel-Request':'1','Content-Type':'application/json'},body:'{}'});
+  assert.equal(refresh.status,202);
+  const pending=await (await fetch(url,{headers})).json();
+  assert.equal(pending.catalog.status,'pending');
+  assert.deepEqual(pending.groups,[{id:groupId,name:'Grupo'}]);
  }finally{await new Promise(resolve=>server.close(resolve));}
+});
+
+test('catalogo distingue offline, pendente, falha e consulta concluida sem grupos',async()=>{
+ await reset();
+ assert.deepEqual((await repo.groupCatalog()).catalog,{status:'offline',updated_at:null,error:null});
+ const w=await connected();
+ assert.equal((await repo.groupCatalog()).catalog.status,'pending');
+ await repo.syncGroups(w,[]);
+ const ready=await repo.groupCatalog();
+ assert.equal(ready.catalog.status,'ready');
+ assert.deepEqual(ready.groups,[]);
+ await repo.requestGroupRefresh();
+ assert.equal((await repo.groupCatalog()).catalog.status,'pending');
+ await repo.beginGroupSync(w);
+ await repo.log(w,'group_catalog_failed','group_lookup_timeout');
+ const failed=await repo.groupCatalog();
+ assert.equal(failed.catalog.status,'failed');
+ assert.equal(failed.catalog.error,'group_lookup_timeout');
 });
 
 test('migration003 idempotente e rollback recusa perder destinatarios grupo',async()=>{

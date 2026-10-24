@@ -24,6 +24,8 @@ const messages = {
   group_not_found: 'O grupo não está disponível na conta conectada. Atualize a lista e confira a participação da conta no grupo.',
   group_not_available: 'O grupo não está disponível na conta conectada. Atualize a lista de grupos.',
   group_catalog_unavailable: 'A lista de grupos ainda não está disponível. Aguarde o WhatsApp conectar e atualize a lista.',
+  group_lookup_timeout: 'A consulta dos grupos excedeu o tempo limite. Atualize a lista novamente.',
+  group_catalog_failed: 'Não foi possível consultar os grupos da conta conectada. Atualize a lista novamente.',
   group_catalog_stale: 'A lista de grupos está desatualizada. Atualize a lista antes de salvar.',
   group_connection_required: 'Conecte o WhatsApp antes de carregar os grupos.',
   group_invalid: 'Selecione um grupo válido da lista da conta conectada.',
@@ -93,17 +95,42 @@ function updateTargetFields() {
   form.elements.target_type.disabled = Boolean(editingRecipient);
   $('#refresh-groups').disabled = groupsLoading || savingRecipient;
 }
+function validGroupList(groups) {
+  return Array.isArray(groups) && groups.every(group => typeof group.id === 'string' && group.id.endsWith('@g.us') && typeof group.name === 'string');
+}
+function describeGroupCatalog(data) {
+  const status = data.catalog?.status || 'ready';
+  if (status === 'offline') return 'A conta está offline. Conecte o WhatsApp e atualize a lista.';
+  if (status === 'pending') return 'A consulta ainda não terminou. Atualize novamente em alguns segundos.';
+  if (status === 'failed') return messages[data.catalog?.error] || messages.group_catalog_failed;
+  if (!data.groups.length) return 'Consulta concluída sem grupos. Isso não confirma que a conta não participa de nenhum grupo; confira a participação e atualize de novo.';
+  return 'Lista atualizada. São exibidos somente grupos da conta conectada.';
+}
 async function loadGroups() {
   if (groupsLoading) return;
   const generation = formGeneration;
-  groupsLoading = true; updateTargetFields(); $('#group-status').textContent = 'Consultando grupos da conta conectada…';
+  const current = () => loggedIn && generation === formGeneration;
+  groupsLoading = true; updateTargetFields(); $('#group-status').textContent = 'Solicitando uma nova consulta de grupos ao WhatsApp…';
   try {
-    const data = await api('groups');
-    if (!loggedIn || generation !== formGeneration) return;
-    if (!Array.isArray(data.groups) || data.groups.some(group => typeof group.id !== 'string' || !group.id.endsWith('@g.us') || typeof group.name !== 'string')) throw new Error('O serviço retornou uma lista de grupos inválida. Atualize novamente.');
-    groupCatalog = data.groups; groupsLoaded = true; updateGroupOptions();
-    $('#group-status').textContent = groupCatalog.length ? 'Lista atualizada. São exibidos somente grupos da conta conectada.' : 'Nenhum grupo disponível. Confira se a conta conectada participa do grupo.';
-  } catch (error) { if (generation === formGeneration && loggedIn) { $('#group-status').textContent = error.message; toast(error.message, true); } }
+    await api('groups-refresh', {});
+    const deadline = Date.now() + 45000;
+    let data;
+    do {
+      if (!current()) return;
+      data = await api('groups');
+      if (data.catalog?.status !== 'pending') break;
+      $('#group-status').textContent = 'Consulta solicitada. Aguardando o worker concluir…';
+      await new Promise(resolve => setTimeout(resolve, 1500));
+    } while (Date.now() < deadline);
+    if (!current()) return;
+    if (!validGroupList(data.groups)) throw new Error('O serviço retornou uma lista de grupos inválida. Atualize novamente.');
+    const status = data.catalog?.status || 'ready';
+    if (status === 'ready' || data.groups.length) groupCatalog = data.groups;
+    groupsLoaded = status === 'ready' || data.groups.length > 0;
+    if (groupsLoaded) updateGroupOptions();
+    $('#group-status').textContent = describeGroupCatalog(data);
+    if (status === 'failed' || status === 'offline') toast($('#group-status').textContent, true);
+  } catch (error) { if (current()) { $('#group-status').textContent = error.message; toast(error.message, true); } }
   finally { groupsLoading = false; updateTargetFields(); }
 }
 function editRecipient(r) {

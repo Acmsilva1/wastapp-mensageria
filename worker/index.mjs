@@ -9,7 +9,7 @@ import { database } from '../lib/db.mjs';
 import { Repository } from '../lib/repository.mjs';
 import { encryptionKey, encrypt } from '../lib/crypto.mjs';
 import { EncryptedStore } from './remote-store.mjs';
-import { catalogGroups, recipientAddress, metadataLookup } from './group-target.mjs';
+import { recipientAddress, discoverGroups, groupCatalogError } from './group-target.mjs';
 import { resetPairingIfRequested, needsFreshPairing, qrRenewalStalled } from './pairing-reset.mjs';
 const require = createRequire(import.meta.url);
 const { Client, RemoteAuth } = require('whatsapp-web.js');
@@ -132,8 +132,10 @@ async function run() {
   }));
   let groupsSyncedAt = 0;
   async function syncGroups() {
-    await repo.syncGroups(worker, catalogGroups(await metadataLookup(() => client.getChats())));
-    groupsSyncedAt = Date.now();
+    await repo.beginGroupSync(worker);
+    try { await repo.syncGroups(worker, await discoverGroups(client)); }
+    catch (error) { await repo.log(worker, 'group_catalog_failed', groupCatalogError(error)); }
+    finally { groupsSyncedAt = Date.now(); }
   }
   client.on('ready', safeEvent(async () => {
     lastQRAt = 0;
@@ -141,7 +143,7 @@ async function run() {
     const phone = client.info?.wid?.user;
     await repo.state(worker, 'connected', client.info?.pushname || 'WhatsApp', phone ? `+${phone}` : null);
     await repo.log(worker, 'connected');
-    try { await syncGroups(); } catch { await repo.log(worker, 'group_catalog_failed'); }
+    try { await syncGroups(); } catch { await repo.log(worker, 'group_catalog_failed', 'group_catalog_failed'); }
     ready = true;
   }));
   client.on('remote_session_saved', safeEvent(async () => { await repo.log(worker, 'session_saved'); }));
@@ -159,8 +161,8 @@ async function run() {
   while (!stopping) {
     if (Date.now() - cleanedAt > 3600000) { await repo.cleanup(); cleanedAt = Date.now(); }
     if (ready) {
-      if (Date.now() - groupsSyncedAt > 60000) {
-        try { await syncGroups(); } catch { groupsSyncedAt = Date.now(); await repo.log(worker, 'group_catalog_failed'); }
+      if (Date.now() - groupsSyncedAt > 60000 || await repo.pendingGroupRefresh(worker)) {
+        try { await syncGroups(); } catch { groupsSyncedAt = Date.now(); await repo.log(worker, 'group_catalog_failed', 'group_catalog_failed'); }
       }
       const job = await repo.claim(worker);
       if (job) { activeSend = deliver(job); await activeSend; activeSend = null; await sleep(2000); continue; }

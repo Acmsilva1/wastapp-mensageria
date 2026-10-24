@@ -227,3 +227,7 @@ Cadastre o mesmo grupo uma vez para cada perfil que deve enviar alertas para ele
 Todos os participantes do grupo podem ver os alertas enviados. A entrega confere se o grupo pertence ao catalogo da sessao atual e consulta novamente o chat antes do envio. Grupo indisponivel ou sem permissao de publicar resulta em erro no historico, sem redirecionar a mensagem para um numero individual.
 
 O rollback 003 recusa execucao enquanto houver destinatarios grupo, preservando os registros e seu historico. Testes locais nao comprovam pareamento ou entrega reais.
+
+## Atualizar o catalogo de grupos
+
+O botao Atualizar grupos solicita ao worker uma nova consulta de metadados do WhatsApp e aguarda a conclusao. O painel distingue offline, pendente, falha e consulta concluida sem resultados. Lista vazia nao comprova ausencia da conta no grupo. Esta correcao nao altera pareamento, nao reinicia sessao e nao exige migration adicional: utiliza os logs existentes para coordenar a atualizacao sob o lease do worker atual. A consulta armazena somente IDs e nomes de grupos.
