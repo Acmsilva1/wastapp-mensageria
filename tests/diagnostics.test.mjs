@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { diagnose, logFailure } from '../lib/diagnostics.mjs';
+import { poolConfig } from '../lib/db.mjs';
 import { createHandler } from '../lib/http-handler.mjs';
 
 test('diagnostico distingue falhas PostgreSQL e TLS sem expor dados', () => {
@@ -11,6 +12,18 @@ test('diagnostico distingue falhas PostgreSQL e TLS sem expor dados', () => {
   assert.equal(diagnose({ cause: { code: 'SELF_SIGNED_CERT_IN_CHAIN' } }).error, 'database_tls_error');
   assert.equal(diagnose({ errors: [{ code: 'ENETUNREACH' }] }).error, 'database_unreachable');
   assert.equal(diagnose(new Error('Connection terminated due to connection timeout')).error, 'database_timeout');
+  assert.equal(diagnose(new Error('timeout exceeded when trying to connect')).error, 'database_timeout');
+  assert.equal(diagnose(new Error('Query read timeout')).error, 'database_timeout');
+  assert.equal(diagnose(new Error('Connection terminated unexpectedly')).error, 'database_connection_reset');
+  assert.equal(diagnose(new Error('MaxClientsInSessionMode: max clients reached')).error, 'database_connection_limit');
+  const apiPool = poolConfig({ DATABASE_URL: 'postgresql://app:secret@pooler.supabase.com:6543/postgres' });
+  const daemonPool = poolConfig({ DATABASE_URL: 'postgresql://app:secret@pooler.supabase.com:6543/postgres', WHATSAPP_DATA_PATH: '/app/.runtime/whatsapp' });
+  assert.equal(apiPool.max, 1);
+  assert.equal(apiPool.query_timeout, 8000);
+  assert.equal(apiPool.allowExitOnIdle, true);
+  assert.equal(apiPool.idleTimeoutMillis, 5000);
+  assert.equal(daemonPool.max, 3);
+  assert.equal(daemonPool.allowExitOnIdle, false);
   assert.equal(diagnose(new Error('No usable sandbox!')).error, 'chromium_sandbox_unavailable');
   const original = console.error; const lines = [];
   console.error = value => lines.push(value);
