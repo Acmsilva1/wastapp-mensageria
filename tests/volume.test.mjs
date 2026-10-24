@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
@@ -86,7 +86,7 @@ test('LocalAuth no volume sobrevive a disconnect e destroy; logout remove so o p
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test('volume guarda sessao operacional sem banco e sem historico concluido', async () => {
+test('volume guarda sessao operacional sem banco e sem o texto da mensagem concluida', async () => {
   const root = await tempVolume();
   try {
     const repo = await openRepository({ WHATSAPP_DATA_PATH: root });
@@ -113,10 +113,22 @@ test('volume guarda sessao operacional sem banco e sem historico concluido', asy
     assert.equal(job.message, 'MENSAGEM-PENDENTE-UNICA');
     await restarted.finish(worker, job.id, 'sent', null, 'wamid');
     const after = JSON.parse(await readFile(path.join(root, 'mensageria.json'), 'utf8'));
-    assert.deepEqual(after.deliveries, []);
-    assert.deepEqual(after.ingress, []);
+    assert.equal(after.ingress.length, 1);
+    assert.equal(after.ingress[0].idempotency_key, 'agua:volume');
+    assert.equal(after.deliveries.length, 1);
+    assert.equal(after.deliveries[0].status, 'sent');
+    assert.equal(after.deliveries[0].title, null);
+    assert.equal(after.deliveries[0].message, null);
+    assert.equal(after.deliveries[0].whatsapp_id, 'wamid');
     assert.equal(JSON.stringify(after).includes('MENSAGEM-PENDENTE-UNICA'), false);
-    assert.equal((await restarted.enqueue(alert())).duplicate, false);
+    const replay = await restarted.enqueue(alert());
+    assert.equal(replay.duplicate, true);
+    assert.equal(replay.jobs.length, 1);
+    assert.equal(replay.jobs[0].status, 'sent');
+    await assert.rejects(restarted.enqueue(alert({ message: 'outro' })), /idempotency_conflict/);
+    const still = JSON.parse(await readFile(path.join(root, 'mensageria.json'), 'utf8'));
+    assert.equal(still.deliveries.length, 1);
+    assert.equal(still.ingress.length, 1);
     const image = 'data:image/png;base64,ZmFrZQ==';
     const key = Buffer.from('c'.repeat(64), 'hex');
     await restarted.state(worker, 'qr', null, null, encrypt(image, key));
@@ -134,6 +146,125 @@ test('volume guarda sessao operacional sem banco e sem historico concluido', asy
     assert.equal((await restarted.allowLogin('global')), true);
     for (let i = 0; i < 9; i++) await restarted.allowLogin('global');
     assert.equal(await restarted.allowLogin('global'), false);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('envio interrompido ou vencido nao libera a mesma chave', async () => {
+  const root = await tempVolume();
+  try {
+    const repo = await VolumeRepository.open(root);
+    const owner = randomUUID();
+    const other = randomUUID();
+    const saved = await repo.saveRecipient(recipient());
+    assert.equal(await repo.lease(owner), true);
+    await repo.enqueue(alert({ idempotency_key: 'agua:incerto', message: 'TEXTO-ENVIO' }));
+    const job = await repo.claim(owner);
+    assert.equal(job.message, 'TEXTO-ENVIO');
+    await repo.release(owner);
+    assert.equal(await repo.lease(other), true);
+    assert.equal(await repo.claim(other), null);
+    const interrupted = JSON.parse(await readFile(path.join(root, 'mensageria.json'), 'utf8'));
+    assert.equal(interrupted.deliveries.length, 1);
+    assert.equal(interrupted.deliveries[0].status, 'uncertain');
+    assert.equal(interrupted.deliveries[0].title, null);
+    assert.equal(interrupted.deliveries[0].message, null);
+    assert.ok(interrupted.deliveries[0].finished_at);
+    assert.equal(interrupted.ingress.length, 1);
+    assert.equal(JSON.stringify(interrupted).includes('TEXTO-ENVIO'), false);
+    assert.equal((await repo.enqueue(alert({ idempotency_key: 'agua:incerto', message: 'TEXTO-ENVIO' }))).duplicate, true);
+    await assert.rejects(repo.enqueue(alert({ idempotency_key: 'agua:incerto', message: 'outro texto' })), /idempotency_conflict/);
+
+    await repo.enqueue(alert({ idempotency_key: 'agua:velha', message: 'TEXTO-VELHO' }));
+    const file = path.join(root, 'mensageria.json');
+    const queued = JSON.parse(await readFile(file, 'utf8'));
+    const pending = queued.deliveries.find(item => item.idempotency_key === 'agua:velha');
+    pending.created_at = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
+    await writeFile(file, JSON.stringify(queued));
+    await repo.cleanup();
+    const expired = JSON.parse(await readFile(file, 'utf8'));
+    const oldJob = expired.deliveries.find(item => item.idempotency_key === 'agua:velha');
+    assert.equal(oldJob.status, 'cancelled');
+    assert.equal(oldJob.message, null);
+    assert.equal(expired.ingress.some(item => item.idempotency_key === 'agua:velha'), true);
+    assert.equal((await repo.enqueue(alert({ idempotency_key: 'agua:velha', message: 'TEXTO-VELHO' }))).duplicate, true);
+
+    await repo.enqueue(alert({ idempotency_key: 'agua:off', message: 'TEXTO-OFF' }));
+    await repo.toggleRecipient(saved.id, false);
+    assert.equal(await repo.claim(other), null);
+    const disabled = JSON.parse(await readFile(file, 'utf8'));
+    const off = disabled.deliveries.find(item => item.idempotency_key === 'agua:off');
+    assert.equal(off.status, 'cancelled');
+    assert.equal(off.message, null);
+    assert.equal(disabled.ingress.some(item => item.idempotency_key === 'agua:off'), true);
+    assert.equal((await repo.enqueue(alert({ idempotency_key: 'agua:off', message: 'TEXTO-OFF' }))).duplicate, true);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('resumo financeiro ignora o perfil; agua e dieta continuam no perfil do evento', async () => {
+  const root = await tempVolume();
+  try {
+    const repo = await VolumeRepository.open(root);
+    const worker = randomUUID();
+    const groupId = '120363123456789@g.us';
+    assert.equal(await repo.lease(worker), true);
+    await repo.state(worker, 'connected');
+    await repo.syncGroups(worker, [{ id: groupId, name: 'Grupo' }]);
+    const phone1 = await repo.saveRecipient(recipient({ phone: '+5511900000001', audience: '1', events: ['financeiro.daily_summary', 'health.water_progress', 'health.diet_menu'] }));
+    const phone2 = await repo.saveRecipient(recipient({ phone: '+5521900000002', audience: '2', events: ['financeiro.daily_summary', 'health.water_progress', 'health.diet_menu'] }));
+    const phoneOff = await repo.saveRecipient(recipient({ phone: '+5531900000003', audience: '2', events: ['health.water_progress', 'health.diet_menu'] }));
+    const disabled = await repo.saveRecipient(recipient({ phone: '+5541900000004', audience: '2', events: ['financeiro.daily_summary'], enabled: false }));
+    const group2 = await repo.saveRecipient(recipientInput({ target_type: 'group', group_id: groupId, name: 'Grupo 2', audience: '2', events: ['financeiro.daily_summary', 'health.water_progress'] }));
+    const money = await repo.enqueue(alert({ audience: '1', event_type: 'financeiro.daily_summary', idempotency_key: 'fin:1', title: 'Resumo', message: 'Caixa do dia' }));
+    assert.equal(money.jobs.length, 3);
+    const stored = JSON.parse(await readFile(path.join(root, 'mensageria.json'), 'utf8'));
+    const financeIds = stored.deliveries.filter(item => item.idempotency_key === 'fin:1').map(item => item.recipient_id).sort();
+    assert.deepEqual(financeIds, [phone1.id, phone2.id, group2.id].sort());
+    assert.equal(financeIds.includes(phoneOff.id), false);
+    assert.equal(financeIds.includes(disabled.id), false);
+    const water = await repo.enqueue(alert({ audience: '1', event_type: 'health.water_progress', idempotency_key: 'agua:1' }));
+    assert.equal(water.jobs.length, 1);
+    const diet = await repo.enqueue(alert({ audience: '1', event_type: 'health.diet_menu', idempotency_key: 'dieta:1', title: 'Almoco', message: 'Menu do dia' }));
+    assert.equal(diet.jobs.length, 1);
+    const claimed = [];
+    for (;;) {
+      const job = await repo.claim(worker);
+      if (!job) break;
+      claimed.push(`${job.recipient_id}:${job.event_type}`);
+      await repo.finish(worker, job.id, 'sent');
+    }
+    const of = event => claimed.filter(item => item.endsWith(`:${event}`)).map(item => item.slice(0, item.lastIndexOf(':'))).sort();
+    assert.deepEqual(of('financeiro.daily_summary'), [phone1.id, phone2.id, group2.id].sort());
+    assert.deepEqual(of('health.water_progress'), [phone1.id]);
+    assert.deepEqual(of('health.diet_menu'), [phone1.id]);
+    const after = JSON.parse(await readFile(path.join(root, 'mensageria.json'), 'utf8'));
+    assert.equal(after.deliveries.some(item => item.status === 'cancelled'), false);
+    assert.equal(after.ingress.length, 3);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('lock do volume so sai com o token deste processo', async () => {
+  const root = await tempVolume();
+  try {
+    const repo = await VolumeRepository.open(root);
+    const lock = path.join(root, '.lock');
+    await repo.mutate(async () => {
+      await writeFile(lock, 'token-de-outro-processo');
+    });
+    assert.equal(await readFile(lock, 'utf8'), 'token-de-outro-processo');
+    await rm(lock, { force: true });
+
+    const fresh = `${Date.now()}:${process.pid}:${randomUUID()}`;
+    await writeFile(lock, fresh);
+    const stale = new Date(Date.now() - 20000);
+    await utimes(lock, stale, stale);
+    await assert.rejects(repo.read(), /volume_lock_timeout/);
+    assert.equal(await readFile(lock, 'utf8'), fresh);
+
+    const oldToken = `${Date.now() - 20000}:${process.pid}:${randomUUID()}`;
+    await writeFile(lock, oldToken);
+    await utimes(lock, stale, stale);
+    await repo.read();
+    await assert.rejects(readFile(lock), { code: 'ENOENT' });
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

@@ -103,6 +103,32 @@ test('perfil com grupo desativado envia so ao numero do mesmo perfil',async()=>{
  assert.equal(claimed.target_type,'phone'); assert.equal(claimed.phone,'+5511900000000');
 });
 
+test('financeiro do perfil 1 chega em telefone e grupo do perfil 2 com a flag; agua e dieta nao',async()=>{
+ await reset(); const w=await connected(); await repo.syncGroups(w,[{id:groupId,name:'Grupo'}]);
+ const phone1=await repo.saveRecipient(recipientInput({name:'Admin',phone:'+5511900000001',audience:'1',events:['financeiro.daily_summary','health.water_progress','health.diet_menu']}));
+ const phone2=await repo.saveRecipient(recipientInput({name:'Outro',phone:'+5521900000002',audience:'2',events:['financeiro.daily_summary','health.water_progress','health.diet_menu']}));
+ const phoneOff=await repo.saveRecipient(recipientInput({name:'Sem flag',phone:'+5531900000003',audience:'2',events:['health.water_progress','health.diet_menu']}));
+ const group2=await repo.saveRecipient(input({audience:'2',events:['financeiro.daily_summary','health.water_progress']}));
+ const money=await repo.enqueue(alertInput({source:'superapp',audience:'1',event_type:'financeiro.daily_summary',idempotency_key:'fin:perfil',title:'Resumo',message:'Caixa'}));
+ assert.equal(money.jobs.length,3);
+ const moneyIds=(await db.query("select recipient_id from mensageria.deliveries where idempotency_key='fin:perfil'")).rows.map(row=>row.recipient_id).sort();
+ assert.deepEqual(moneyIds,[phone1.id,phone2.id,group2.id].sort());
+ assert.equal(moneyIds.includes(phoneOff.id),false);
+ const water=await repo.enqueue(alertInput({source:'superapp',audience:'1',event_type:'health.water_progress',idempotency_key:'agua:perfil',title:'Agua',message:'Beba'}));
+ assert.equal(water.jobs.length,1);
+ assert.equal((await db.query("select recipient_id from mensageria.deliveries where idempotency_key='agua:perfil'")).rows[0].recipient_id,phone1.id);
+ const diet=await repo.enqueue(alertInput({source:'superapp',audience:'1',event_type:'health.diet_menu',idempotency_key:'dieta:perfil',title:'Almoco',message:'Menu'}));
+ assert.equal(diet.jobs.length,1);
+ assert.equal((await db.query("select recipient_id from mensageria.deliveries where idempotency_key='dieta:perfil'")).rows[0].recipient_id,phone1.id);
+ const claimed=[];
+ for(;;){ const job=await repo.claim(w); if(!job) break; claimed.push(`${job.recipient_id}:${job.event_type}`); await repo.finish(w,job.id,'sent'); }
+ const of=event=>claimed.filter(item=>item.endsWith(':'+event)).map(item=>item.slice(0,item.lastIndexOf(':'))).sort();
+ assert.deepEqual(of('financeiro.daily_summary'),[phone1.id,phone2.id,group2.id].sort());
+ assert.deepEqual(of('health.water_progress'),[phone1.id]);
+ assert.deepEqual(of('health.diet_menu'),[phone1.id]);
+ assert.equal((await db.query("select count(*)::int as n from mensageria.deliveries where status='cancelled'")).rows[0].n,0);
+});
+
 test('evento da dieta nao sai para o numero que so autorizou agua',async()=>{
  await reset(); const w=await connected(); await repo.syncGroups(w,[{id:groupId,name:'Grupo'}]);
  await repo.saveRecipient(input({events:['health.diet_menu']}));

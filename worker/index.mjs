@@ -8,6 +8,7 @@ import QRCode from 'qrcode';
 import { encryptionKey, encrypt } from '../lib/crypto.mjs';
 import { closeRepository, openRepository } from '../lib/open-repository.mjs';
 import { recipientAddress, discoverGroups, groupCatalogError } from './group-target.mjs';
+import { recipientAccepts } from '../lib/domain.mjs';
 import { whatsappOutbound } from '../lib/outbound-message.mjs';
 import { resetPairingIfRequested, needsFreshPairing, qrRenewalStalled, removeSessionArtifacts } from './pairing-reset.mjs';
 import { applySessionFingerprint, sessionFingerprint } from './session-fingerprint.mjs';
@@ -63,7 +64,7 @@ async function deliver(job) {
   try {
     await repo.heartbeat(worker);
     const recipient = await repo.recipient(job.recipient_id);
-    if (!recipient?.enabled || recipient.audience !== job.audience || !recipient.events.includes(job.event_type)) return await repo.finish(worker, job.id, 'cancelled', 'recipient_disabled');
+    if (!recipientAccepts(recipient, job)) return await repo.finish(worker, job.id, 'cancelled', 'recipient_disabled');
     const address = await recipientAddress(client, repo, recipient);
     await repo.heartbeat(worker);
     if (stopping || !ready) return await repo.finish(worker, job.id, 'failed', 'connection_unavailable_before_send');
