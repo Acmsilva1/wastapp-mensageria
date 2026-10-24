@@ -194,5 +194,22 @@ $('#recipient-form').onsubmit = async event => { event.preventDefault(); if (sav
   savingRecipient = true; button.disabled = true; $('#cancel-edit').disabled = true; updateTargetFields();
   try { await api('recipients', payload); resetForm(); toast('Destinatário salvo.'); await refresh(); } catch (error) { toast(error.message, true); } finally { savingRecipient = false; button.disabled = false; $('#cancel-edit').disabled = false; updateTargetFields(); }
 };
+const paneCopy = {
+  connect: ['Conectividade', 'Conta do WhatsApp, status e pareamento.'],
+  logs: ['Logs', 'Últimos envios e eventos desta seção.'],
+  alerts: ['Adicionar alertas', 'Cadastre um número ou um grupo e escolha o que cada um recebe.']
+};
+function showTab(name) {
+  const [title, copy] = paneCopy[name] || paneCopy.connect;
+  $('#pane-title').textContent = title;
+  $('#pane-copy').textContent = copy;
+  for (const button of document.querySelectorAll('[data-tab]')) {
+    const on = button.dataset.tab === name;
+    button.classList.toggle('active', on);
+    if (on) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current');
+  }
+  for (const pane of document.querySelectorAll('[data-pane]')) pane.hidden = pane.dataset.pane !== name;
+}
+for (const button of document.querySelectorAll('[data-tab]')) button.onclick = () => showTab(button.dataset.tab);
 api('session').then(data => { events = data.events; if (data.authenticated) { showDashboard(data.demo); refresh(); } else showLogin(); }).catch(error => toast(error.message, true));
 setInterval(refresh, 5000);

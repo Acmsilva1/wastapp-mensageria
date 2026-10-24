@@ -7,6 +7,8 @@ RUN npm ci --omit=dev --no-audit --no-fund
 COPY lib ./lib
 COPY worker ./worker
 RUN mkdir -p /app/.runtime/whatsapp && chown -R node:node /app
+# Volume da sessao. O boot nao apaga este diretorio.
+VOLUME ["/app/.runtime/whatsapp"]
 USER node
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["node", "worker/index.mjs"]

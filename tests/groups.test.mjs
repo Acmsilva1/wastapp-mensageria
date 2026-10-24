@@ -59,6 +59,8 @@ test('fila permite grupo e telefone por perfil; filtro e dedupe continuam iguais
  await repo.saveRecipient(recipientInput({name:'Pessoa',phone:'+5511900000000',audience:'1',events:['health.water_progress']}));
  const event=alertInput({source:'superapp',audience:'1',event_type:'health.water_progress',idempotency_key:'grupo-teste',title:'Teste',message:'Nao enviar'});
  assert.equal((await repo.enqueue(event)).jobs.length,2);
+ const both=(await db.query("select r.target_type from mensageria.deliveries d join mensageria.recipients r on r.id=d.recipient_id where d.idempotency_key='grupo-teste' order by r.target_type")).rows.map(row=>row.target_type);
+ assert.deepEqual(both,['group','phone']);
  assert.equal((await repo.enqueue(event)).duplicate,true);
  const claimed=await repo.claim(w);assert.ok(['group','phone'].includes(claimed.target_type));
  assert.equal((await db.query('select * from mensageria.deliveries')).rows.length,2);
@@ -88,6 +90,26 @@ test('perfil com numero desativado envia so ao grupo mesmo se a consulta ao vivo
  let lookups=0;
  assert.equal(await recipientAddress({getChatById:async()=>{lookups++;throw Error('chat ausente');}},repo,claimed),groupId);
  assert.equal(lookups,2);
+});
+
+test('perfil com grupo desativado envia so ao numero do mesmo perfil',async()=>{
+ await reset(); const w=await connected(); await repo.syncGroups(w,[{id:groupId,name:'Grupo'}]);
+ const group=await repo.saveRecipient(input());
+ await repo.saveRecipient(recipientInput({name:'Pessoa',phone:'+5511900000000',audience:'1',events:['health.water_progress']}));
+ await repo.toggleRecipient(group.id,false);
+ const queued=await repo.enqueue(alertInput({source:'superapp',audience:'1',event_type:'health.water_progress',idempotency_key:'so-numero',title:'Teste',message:'Nao enviar'}));
+ assert.equal(queued.jobs.length,1);
+ const claimed=await repo.claim(w);
+ assert.equal(claimed.target_type,'phone'); assert.equal(claimed.phone,'+5511900000000');
+});
+
+test('evento da dieta nao sai para o numero que so autorizou agua',async()=>{
+ await reset(); const w=await connected(); await repo.syncGroups(w,[{id:groupId,name:'Grupo'}]);
+ await repo.saveRecipient(input({events:['health.diet_menu']}));
+ await repo.saveRecipient(recipientInput({name:'Pessoa',phone:'+5511900000000',audience:'1',events:['health.water_progress']}));
+ const queued=await repo.enqueue(alertInput({source:'superapp',audience:'1',event_type:'health.diet_menu',idempotency_key:'so-dieta',title:'Almoco',message:'Menu'}));
+ assert.equal(queued.jobs.length,1);
+ assert.equal((await repo.claim(w)).target_type,'group');
 });
 
 test('consulta de metadados tem prazo e nao bloqueia indefinidamente os envios',async()=>{

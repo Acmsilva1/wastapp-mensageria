@@ -2,13 +2,12 @@ import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { createHandler } from '../lib/http-handler.mjs';
 import { DemoRepository } from '../lib/demo-repository.mjs';
-import { database } from '../lib/db.mjs';
-import { Repository } from '../lib/repository.mjs';
+import { openRepository } from '../lib/open-repository.mjs';
 const demo = process.argv.includes('--demo');
 if (demo && process.env.VERCEL) throw new Error('demo_local_only');
 const port = Number(process.env.PORT || 3338);
 const origin = `http://127.0.0.1:${port}`;
-const repository = demo ? new DemoRepository() : new Repository(database());
+const repository = demo ? new DemoRepository() : await openRepository();
 const handler = createHandler({ repository, demo, env: demo ? { ...process.env, APP_ORIGIN: origin } : process.env });
 const routes = { '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/styles.css': ['styles.css', 'text/css; charset=utf-8'] };
 const server = http.createServer(async (req, res) => {

@@ -184,8 +184,11 @@ test('falha ao limpar sessao mantem pedido pendente para proxima inicializacao',
   await assert.rejects(resetPairingIfRequested(repo,worker,tmpdir(), async () => {throw new Error('locked');}), /locked/);
   assert.equal(await repo.pendingPairingReset(worker),request);
   assert.equal(needsFreshPairing('disconnected','LOGOUT'),true);
-  assert.equal(needsFreshPairing('auth_failure'),true);
+  assert.equal(needsFreshPairing('auth_failure'),false);
+  assert.equal(needsFreshPairing('auth_failure','LOGOUT'),false);
   assert.equal(needsFreshPairing('disconnected','TIMEOUT'),false);
+  assert.equal(needsFreshPairing('disconnected','UNLAUNCHED'),false);
+  assert.equal(needsFreshPairing('disconnected','CONFLICT'),false);
   assert.equal(qrRenewalStalled(1000, 91001), true);
   assert.equal(qrRenewalStalled(1000, 90000), false);
   assert.equal(qrRenewalStalled(0, 99999999), false); // autenticado/conectado nao reinicia
