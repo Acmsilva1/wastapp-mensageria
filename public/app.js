@@ -1,5 +1,7 @@
 const $ = selector => document.querySelector(selector);
 const messages = {
+  agent_channel_unavailable: 'O canal de projetos requer a mensageria no modo volume da VPS.',
+  agent_private_only: 'Avisos de projetos são permitidos somente para números individuais.',
   invalid_group_id: 'Selecione um grupo válido da lista da conta conectada.',
   group_unavailable: 'O grupo não está mais disponível para a conta conectada.',
   group_read_only: 'A conta conectada não tem permissão para enviar mensagens nesse grupo.',
@@ -90,6 +92,7 @@ function updateTargetFields() {
   const form = $('#recipient-form');
   const group = form.elements.target_type.value === 'group';
   $('#interaction-fields').hidden = group;
+  form.querySelector('[name=events][value="agent.notice"]').disabled=group;
   for (const input of form.querySelectorAll('[name=permissions]')) input.disabled = group;
   $('#phone-field').hidden = group; $('#group-field').hidden = !group;
   form.elements.phone.disabled = group; form.elements.phone.required = !group;

@@ -16,6 +16,7 @@ import { VolumeAuth, SESSION_CLIENT_ID } from './volume-auth.mjs';
 import { createWaterReplies, callbackConfig, WATER_OPTIONS, WATER_QUESTION } from './water-replies.mjs';
 import { serializedId, installSerializedIdCompatibility } from './serialized-id-compat.mjs';
 import {createMessageReplacement,revokeBotMessage} from './message-replacement.mjs';
+import {createAgentChannel} from './agent-channel.mjs';
 import {createWhatsAppPurchases} from './whatsapp-purchases.mjs';
 const require = createRequire(import.meta.url);
 const { Client, Poll } = require('whatsapp-web.js');
@@ -26,6 +27,7 @@ const key = encryptionKey();
 const dataPath = path.resolve(process.env.WHATSAPP_DATA_PATH || '.runtime/whatsapp');
 await mkdir(dataPath, { recursive: true, mode: 0o700 });
 let client;
+let agentChannel;
 let ready = false;
 let stopping = false;
 let heartbeat;
@@ -70,6 +72,7 @@ async function deliver(job) {
     await repo.heartbeat(worker);
     const recipient = await repo.recipient(job.recipient_id);
     if (!recipientAccepts(recipient, job)) return await repo.finish(worker, job.id, 'cancelled', 'recipient_disabled');
+    if(job.event_type==='agent.notice'&&!await agentChannel.authorizeDelivery(job,recipient))return await repo.finish(worker,job.id,'cancelled','agent_request_closed');
     const address = await recipientAddress(client, repo, recipient);
     await replacements.withScope(job,address,async()=>{
       await repo.heartbeat(worker);
@@ -97,6 +100,7 @@ async function deliver(job) {
       // 'sent' significa aceito pela biblioteca; nao significa lido ou entregue no celular.
       if (!serializedId(message?.id)) throw new Error('send_missing_message_id');
       sentIds.push(serializedId(message.id));
+      if(job.event_type==='agent.notice')await agentChannel.bind(job,recipient,address,serializedId(message.id));
       await replacements.complete(job,address,sentIds,water?2:1);
     });
   } catch (error) {
@@ -145,10 +149,11 @@ async function run() {
   const safeEvent = action => (...args) => { action(...args).catch(() => close('state_write_failed').finally(() => process.exit(1))); };
   const waterReplies=createWaterReplies({client,repo,worker,replacements});
   const purchases=createWhatsAppPurchases({client,repo,worker,Poll});
+  agentChannel=createAgentChannel({client,repo,dataPath});
   const inbound=action => (...args) => { if (!ready || stopping) return; action(...args).catch(()=>console.error('inbound_processing_failed')); };
   client.on('vote_update',inbound(async vote=>{await waterReplies.vote(vote);await purchases.vote(vote);}));
   // message_create includes own-account replies; authorization still requires its recipient registration.
-  client.on('message_create',inbound(async message=>{await waterReplies.message(message);await purchases.message(message);}));
+  client.on('message_create',inbound(async message=>{if(await agentChannel.message(message))return;await waterReplies.message(message);await purchases.message(message);}));
   async function noteGroupFailure(error) {
     const code = groupCatalogError(error);
     if (typeof repo.failGroupSync === 'function') await repo.failGroupSync(worker, code);
@@ -184,6 +189,7 @@ async function run() {
     await repo.state(worker, 'connected', client.info?.pushname || 'WhatsApp', phone ? `+${phone}` : null);
     await repo.markSessionSaved(worker);
     await repo.log(worker, 'connected');
+    try{await agentChannel.ready();}catch{console.error('agent_channel_owner_unavailable');}
     ready = true;
   }));
   for (const event of ['auth_failure', 'disconnected']) client.on(event, safeEvent(async reason => {
@@ -204,8 +210,9 @@ async function run() {
   let cleanedAt = 0;
   let deletionsAt = 0;
   while (!stopping) {
-    if (Date.now() - cleanedAt > 3600000) { await repo.cleanup(); cleanedAt = Date.now(); }
+    if (Date.now() - cleanedAt > 3600000) { await repo.cleanup(); try{await agentChannel.cleanup();}catch{console.error('agent_channel_cleanup_failed');} cleanedAt = Date.now(); }
     if (ready) {
+      agentChannel.refresh();
       if(Date.now()-deletionsAt>30000) {
         deletionsAt=Date.now();
         try {await replacements.cleanup();} catch {console.error('replacement_cleanup_failed');}

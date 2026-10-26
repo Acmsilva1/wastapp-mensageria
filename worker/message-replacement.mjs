@@ -2,7 +2,7 @@ import {serializedId} from './serialized-id-compat.mjs';
 import {metadataLookup} from './group-target.mjs';
 
 const individual=address=>typeof address==='string' && /^\d{5,20}@(c\.us|lid)$/.test(address);
-export const replacementScope=(job,address)=>individual(address)?JSON.stringify([address,job.audience,job.event_type]):null;
+export const replacementScope=(job,address)=>job.event_type!=='agent.notice'&&individual(address)?JSON.stringify([address,job.audience,job.event_type]):null;
 
 // Self-contained Chromium adapter. Local deletion is allowed ONLY in the connected account's self-chat.
 export async function revokeOwnMessageInPage(messageId,address) {
