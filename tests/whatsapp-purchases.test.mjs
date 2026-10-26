@@ -211,10 +211,10 @@ test('descrição e valor bastam; débito/Pix é único e ausências reais conti
  }finally{await f.close();}
 });
 
-for(const mode of ['sql','volume'])test(`${mode}: pergunta antiga de pagamento vira prévia via pendente; pedido submetido mantém pagamento legado`,async()=>{
+for(const mode of ['sql','volume'])for(const legacyStatus of ['clarification','preparing'])test(`${mode}/${legacyStatus}: pergunta antiga de pagamento vira prévia via pendente; pedido submetido mantém pagamento legado`,async()=>{
  const f=await fixture(mode);try{
   const oldId=randomUUID();
-  await f.repo.changePurchaseState(f.worker,root=>{root.sessions={[f.recipient.id]:{version:interactionVersion(f.recipient),draft:{id:oldId,owner_phone:phone,address,authorization_id:f.recipient.id,authorization_version:interactionVersion(f.recipient),status:'clarification',date:'2026-10-26',items:[{...items[0],payment:null}],expires_at:'2026-10-26T15:15:00Z',question_ids:['old-payment-question']}}};});
+  await f.repo.changePurchaseState(f.worker,root=>{root.sessions={[f.recipient.id]:{version:interactionVersion(f.recipient),draft:{id:oldId,owner_phone:phone,address,authorization_id:f.recipient.id,authorization_version:interactionVersion(f.recipient),status:legacyStatus,date:'2026-10-26',items:[{...items[0],payment:null}],expires_at:'2026-10-26T15:15:00Z',question_ids:['old-payment-question']}}};});
   const h=f.factory();await h.message(f.message('/pendente'));const draft=(await f.state()).draft;
   assert.equal(f.extracts,0);assert.equal(draft.id,oldId);assert.equal(draft.status,'draft');assert.equal(draft.items[0].payment,'debito_pix');assert.equal(f.sent.length,2);
   const raw=[{...items[0],payment:'pix'}];

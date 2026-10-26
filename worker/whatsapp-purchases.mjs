@@ -148,7 +148,7 @@ function createPurchaseSession({client,repo,worker,env=process.env,scope,authori
     }else{
      const extracted=validatePurchaseExtraction({status:'ready',reason:'none',date:draft.date,items:draft.items},brazilDate(new Date(now())));
      // A legacy ready preview keeps its exact items for idempotent recovery.
-     if(draft.status!=='clarification')extracted.items=draft.items;
+     if(draft.status==='draft')extracted.items=draft.items;
      await publish(draft,extracted,address);
     }
    }else await outbound(address,'🦉 Não há compra pendente. Envie a descrição e o valor da despesa. Exemplo: gastei 10 reais na padaria.');
