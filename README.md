@@ -234,6 +234,8 @@ O botao Atualizar grupos solicita ao worker uma nova consulta de metadados do Wh
 
 ## Registrar água pelo WhatsApp
 
+Para lançamentos de compras por texto e áudio, veja [o fluxo de compras](docs/whatsapp-compras.md). A chave Groq fica somente no worker e toda compra exige confirmação.
+
 O lembrete mantém o texto completo e envia em seguida uma enquete nativa de escolha única: **100, 200, 300, 400, 500 ml, 1 L ou 2 L**. Também é possível usar **Responder** no lembrete ou na enquete e escrever `200 ml`, `1 L` etc. O consumo é enviado ao Super App; a confirmação mostra o total do dia e quanto falta para a meta, ou que a meta foi atingida. Cada lembrete aceita um registro; alterar o voto não cria outro consumo. Para beber novamente, use outro lembrete ou o próprio app.
 
 Para ativar:

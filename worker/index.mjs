@@ -16,6 +16,7 @@ import { VolumeAuth, SESSION_CLIENT_ID } from './volume-auth.mjs';
 import { createWaterReplies, callbackConfig, WATER_OPTIONS, WATER_QUESTION } from './water-replies.mjs';
 import { serializedId, installSerializedIdCompatibility } from './serialized-id-compat.mjs';
 import {createMessageReplacement,revokeBotMessage} from './message-replacement.mjs';
+import {createWhatsAppPurchases} from './whatsapp-purchases.mjs';
 const require = createRequire(import.meta.url);
 const { Client, Poll } = require('whatsapp-web.js');
 
@@ -143,10 +144,11 @@ async function run() {
   let qrGeneration = 0;
   const safeEvent = action => (...args) => { action(...args).catch(() => close('state_write_failed').finally(() => process.exit(1))); };
   const waterReplies=createWaterReplies({client,repo,worker,replacements});
-  const inbound=action => (...args) => { if (!ready || stopping) return; action(...args).catch(()=>console.error('water_reply_failed')); };
-  client.on('vote_update',inbound(vote=>waterReplies.vote(vote)));
+  const purchases=createWhatsAppPurchases({client,repo,worker,Poll});
+  const inbound=action => (...args) => { if (!ready || stopping) return; action(...args).catch(()=>console.error('inbound_processing_failed')); };
+  client.on('vote_update',inbound(async vote=>{await waterReplies.vote(vote);await purchases.vote(vote);}));
   // message_create includes own-account replies; authorization still requires its recipient registration.
-  client.on('message_create',inbound(message=>waterReplies.message(message)));
+  client.on('message_create',inbound(async message=>{await waterReplies.message(message);await purchases.message(message);}));
   async function noteGroupFailure(error) {
     const code = groupCatalogError(error);
     if (typeof repo.failGroupSync === 'function') await repo.failGroupSync(worker, code);
