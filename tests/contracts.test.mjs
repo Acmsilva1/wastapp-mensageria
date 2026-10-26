@@ -21,6 +21,7 @@ before(async () => {
   await db.exec(up);
   await db.exec(await readFile(new URL('../migrations/002_pairing_reset.sql', import.meta.url), 'utf8'));
   await db.exec(await readFile(new URL('../migrations/003_group_recipients.sql', import.meta.url), 'utf8'));
+  await db.exec(await readFile(new URL('../migrations/007_interaction_permissions.sql', import.meta.url), 'utf8'));
   repo = new Repository({ query: (...args) => db.query(...args), connect: async () => ({ query: (...args) => db.query(...args), release() {} }) });
 });
 after(async () => { await db.close(); });
@@ -218,6 +219,7 @@ test('migration e rollback funcionam e RLS esta habilitada em todas as tabelas',
   await db.exec(resetUp); // repeticao segura em banco ja atualizado
   await db.exec(await readFile(new URL('../migrations/002_pairing_reset_rollback.sql', import.meta.url), 'utf8'));
   await db.exec(resetUp);
+  await db.exec(await readFile(new URL('../migrations/007_interaction_permissions_rollback.sql', import.meta.url), 'utf8'));
   await db.exec(await readFile(new URL('../migrations/003_group_recipients_rollback.sql', import.meta.url), 'utf8'));
   await db.exec(down);
   assert.equal((await db.query("select 1 from pg_namespace where nspname='mensageria'")).rows.length, 0);

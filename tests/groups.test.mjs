@@ -14,7 +14,7 @@ const groupId='120363123456789@g.us';
 const input=(changes={})=>recipientInput({target_type:'group',group_id:groupId,name:'Meu grupo',audience:'1',events:['health.water_progress'],...changes});
 before(async()=>{
  db=new PGlite();
- for(const f of ['001_mensageria.sql','002_pairing_reset.sql','003_group_recipients.sql']) await db.exec(await readFile(new URL('../migrations/'+f,import.meta.url),'utf8'));
+ for(const f of ['001_mensageria.sql','002_pairing_reset.sql','003_group_recipients.sql','007_interaction_permissions.sql']) await db.exec(await readFile(new URL('../migrations/'+f,import.meta.url),'utf8'));
  repo=new Repository({query:(...args)=>db.query(...args),connect:async()=>({query:(...args)=>db.query(...args),release(){}})});
 });
 after(async()=>db.close());
@@ -192,6 +192,6 @@ test('migration003 idempotente e rollback recusa perder destinatarios grupo',asy
  await db.exec(up);
  await assert.rejects(db.exec(down),/group_recipients_exist/);await db.exec('rollback');
  assert.equal((await repo.recipients()).length,1);
- await reset();await db.exec(down);await db.exec(up);
+ await reset();await db.exec(await readFile(new URL('../migrations/007_interaction_permissions_rollback.sql',import.meta.url),'utf8'));await db.exec(down);await db.exec(up);
  const rls=await db.query("select relrowsecurity from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='mensageria' and c.relname='group_catalog'");assert.equal(rls.rows[0].relrowsecurity,true);
 });

@@ -14,7 +14,7 @@ import {createWaterReplies,brazilDate} from '../worker/water-replies.mjs';
 async function fixture(mode) {
  let db,dir,repo;
  if(mode==='sql') {
-  db=new PGlite();for(const f of ['001_mensageria.sql','002_pairing_reset.sql','003_group_recipients.sql','004_water_replies.sql','005_message_replacement.sql'])await db.exec(await readFile(new URL('../migrations/'+f,import.meta.url),'utf8'));
+  db=new PGlite();for(const f of ['001_mensageria.sql','002_pairing_reset.sql','003_group_recipients.sql','004_water_replies.sql','005_message_replacement.sql','007_interaction_permissions.sql'])await db.exec(await readFile(new URL('../migrations/'+f,import.meta.url),'utf8'));
   repo=new Repository({query:(...args)=>db.query(...args),connect:async()=>({query:(...args)=>db.query(...args),release(){}})});
  }else{dir=await mkdtemp(path.join(os.tmpdir(),'replace-'));repo=await VolumeRepository.open(dir);}
  const worker=randomUUID();await repo.lease(worker);let count=0;
@@ -23,7 +23,7 @@ async function fixture(mode) {
  const row=async id=>mode==='sql'?(await db.query('select * from mensageria.deliveries where id=$1',[id])).rows[0]:(await repo.read()).deliveries.find(r=>r.id===id);
  async function job({event_type='health.water_progress',audience='1',number=phone,group=false,water=true}={}) {
   if(group){await repo.state(worker,'connected');await repo.syncGroups(worker,[{id:number,name:'Grupo'}]);}
-  await repo.saveRecipient(recipientInput({name:'Teste',audience,events:allEvents,...(group?{target_type:'group',group_id:number}:{phone:number})}));
+  await repo.saveRecipient(recipientInput({name:'Teste',audience,events:allEvents,permissions:group?[]:['water.record'],...(group?{target_type:'group',group_id:number}:{phone:number})}));
   const key=`agua:${brazilDate()}:10:${String(++count).padStart(2,'0')}:${audience}`;
   const event=alertInput({source:'superapp',audience,event_type,idempotency_key:key,title:'Aviso',message:'Ficticio',...(event_type==='health.water_progress' && water?{water_prompt:{profile_id:audience,date:brazilDate(),dedupe_key:key,signature:'a'.repeat(64)}}:{})});
   await repo.enqueue(event);

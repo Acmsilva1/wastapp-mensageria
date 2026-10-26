@@ -6,6 +6,7 @@ import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {createRequire} from 'node:module';
 import {PGlite} from '@electric-sql/pglite';
+import {recipientInput,interactionVersion} from '../lib/domain.mjs';
 import {Repository} from '../lib/repository.mjs';
 import {VolumeRepository} from '../lib/volume-repository.mjs';
 import {createWhatsAppPurchases,recordWhatsAppPurchase,purchaseTextIntent,prunePurchaseState} from '../worker/whatsapp-purchases.mjs';
@@ -20,10 +21,11 @@ async function fixture(mode){
  let db,dir,repo;
  if(mode==='sql'){
   db=new PGlite();
-  for(const file of ['001_mensageria.sql','002_pairing_reset.sql','003_group_recipients.sql','004_water_replies.sql','005_message_replacement.sql','006_whatsapp_purchases.sql'])await db.exec(await readFile(new URL('../migrations/'+file,import.meta.url),'utf8'));
+  for(const file of ['001_mensageria.sql','002_pairing_reset.sql','003_group_recipients.sql','004_water_replies.sql','005_message_replacement.sql','006_whatsapp_purchases.sql','007_interaction_permissions.sql'])await db.exec(await readFile(new URL('../migrations/'+file,import.meta.url),'utf8'));
   repo=new Repository({query:(...args)=>db.query(...args),connect:async()=>({query:(...args)=>db.query(...args),release(){}})});
  }else{dir=await mkdtemp(path.join(os.tmpdir(),'purchase-flow-'));repo=await VolumeRepository.open(dir);}
  const worker=randomUUID();await repo.lease(worker);
+ const recipient=await repo.saveRecipient(recipientInput({name:'Autorizado',phone,audience:'perfil-a',events:[],permissions:['purchases.record']}));
  let time=Date.parse('2026-10-26T15:00:00Z'),serial=0,extracts=0,records=0,downloads=0,failRecord=false,failReceipt=false;
  const sent=[],requests=[],inputs=[];
  const client={info:{wid:{_serialized:address,user:phone.slice(1)}},getContactLidAndPhone:async()=>[{pn:address,lid}]};
@@ -33,43 +35,43 @@ async function fixture(mode){
   send:async(to,content)=>{if(failReceipt&&typeof content==='string'&&content.startsWith('✅'))throw new Error('network_failure');const id='out-'+(++serial);sent.push({to,content,id});return {id:{$1:id}};},...extra});
  const message=(text='Gastei 35,50 na padaria no débito',quote=null,changes={})=>({type:'chat',body:text,id:{_serialized:'in-'+(++serial)},to:address,from:address,fromMe:true,timestamp:time/1000,hasQuotedMsg:Boolean(quote),getQuotedMessage:async()=>({fromMe:true,id:{$1:quote}}),...changes});
  const vote=(draft,confirm=true,changes={})=>({voter:{$1:address},parentMessage:{to:address,id:{$1:draft.poll_id}},selectedOptions:[{localId:confirm?0:1,name:confirm?'Confirmar':'Cancelar'}],...changes});
- return {repo,worker,db,dir,factory,message,vote,sent,requests,inputs,get extracts(){return extracts;},get records(){return records;},get downloads(){return downloads;},download(){downloads++;return null;},setFailRecord(v){failRecord=v;},setFailReceipt(v){failReceipt=v;},advance(ms){time+=ms;},close:async()=>{if(db)await db.close();if(dir)await rm(dir,{recursive:true,force:true});}};
+ return {repo,recipient,state:async()=> (await repo.purchaseState()).sessions?.[recipient.id] || {},worker,db,dir,factory,message,vote,sent,requests,inputs,get extracts(){return extracts;},get records(){return records;},get downloads(){return downloads;},download(){downloads++;return null;},setFailRecord(v){failRecord=v;},setFailReceipt(v){failReceipt=v;},advance(ms){time+=ms;},close:async()=>{if(db)await db.close();if(dir)await rm(dir,{recursive:true,force:true});}};
 }
 
 for(const mode of ['sql','volume']){
  test(`${mode}: rascunho não grava; dono/grupo/eco/água isolados; confirmação idempotente após reiniciar`,async()=>{
   const f=await fixture(mode);try{
    let h=f.factory();
-   for(const changes of [{fromMe:false},{to:'5511999999999@c.us'},{to:'123@g.us'},{isForwarded:true}])await h.message(f.message(undefined,null,changes));
+   for(const changes of [{fromMe:false,from:'5511999999999@c.us'},{to:'5511999999999@c.us'},{to:'123@g.us'},{isForwarded:true}])await h.message(f.message(undefined,null,changes));
    await h.message(f.message('💧 Hora de beber água!'));await h.message(f.message('200 ml'));
    assert.equal(f.extracts,0);assert.equal(f.records,0);
    const initial=f.message();await h.message(initial);await h.message(initial);assert.equal(f.extracts,1);assert.equal(f.records,0);
-   const draft=(await f.repo.purchaseState()).draft;assert.equal(draft.status,'draft');assert.equal(draft.items[0].amount_cents,3550);assert.equal(f.sent.length,2);
+   const draft=(await f.state()).draft;assert.equal(draft.status,'draft');assert.equal(draft.items[0].amount_cents,3550);assert.equal(f.sent.length,2);
    await h.message(f.message('sim'));assert.equal(f.records,0);
    await h.vote(f.vote(draft,true,{parentMessage:{to:address,id:{_serialized:'forged'}}}));assert.equal(f.records,0);
    if(mode==='volume')f.repo=await VolumeRepository.open(f.dir);
    h=f.factory();await h.vote(f.vote(draft));assert.equal(f.records,1);
-   assert.equal((await f.repo.purchaseState()).draft.status,'saved');assert.equal((await f.repo.purchaseState()).draft.items,undefined);
+   assert.equal((await f.state()).draft.status,'saved');assert.equal((await f.state()).draft.items,undefined);
    await h.vote(f.vote(draft));assert.equal(f.records,1);assert.match(f.sent.at(-1).content,/já confirmado/);
   }finally{await f.close();}
  });
  test(`${mode}: correção invalida voto anterior, cancelamento não grava, prazo não renova`,async()=>{
   const f=await fixture(mode);try{
    const h=f.factory({extract:async(text,context)=>output({items:[{...items[0],amount_cents:context?4280:3550}]})});
-   await h.message(f.message());const old=(await f.repo.purchaseState()).draft;
-   f.advance(60000);await h.message(f.message('Na verdade foram42,80 no Pix',old.preview_ids[0]));const fresh=(await f.repo.purchaseState()).draft;
+   await h.message(f.message());const old=(await f.state()).draft;
+   f.advance(60000);await h.message(f.message('Na verdade foram42,80 no Pix',old.preview_ids[0]));const fresh=(await f.state()).draft;
    assert.equal(fresh.revision,2);assert.equal(fresh.expires_at,old.expires_at);assert.equal(fresh.items[0].amount_cents,4280);
-   await h.vote(f.vote(old));assert.equal(f.records,0);await h.vote(f.vote(fresh,false));assert.equal(f.records,0);assert.equal((await f.repo.purchaseState()).draft.status,'cancelled');
-   await h.message(f.message());const pending=(await f.repo.purchaseState()).draft;f.advance(16*60000);await h.vote(f.vote(pending));assert.equal(f.records,0);assert.equal((await f.repo.purchaseState()).draft.status,'expired');
+   await h.vote(f.vote(old));assert.equal(f.records,0);await h.vote(f.vote(fresh,false));assert.equal(f.records,0);assert.equal((await f.state()).draft.status,'cancelled');
+   await h.message(f.message());const pending=(await f.state()).draft;f.advance(16*60000);await h.vote(f.vote(pending));assert.equal(f.records,0);assert.equal((await f.state()).draft.status,'expired');
   }finally{await f.close();}
  });
  test(`${mode}: timeout conserva UUID/itens; resposta perdida recupera recibo sem gravar de novo`,async()=>{
   const f=await fixture(mode);try{
-   const h=f.factory();await h.message(f.message());const draft=(await f.repo.purchaseState()).draft;
-   f.setFailRecord(true);await h.vote(f.vote(draft));assert.equal((await f.repo.purchaseState()).draft.status,'submitting');
-   await h.vote(f.vote(draft,false));assert.equal((await f.repo.purchaseState()).draft.status,'submitting');
+   const h=f.factory();await h.message(f.message());const draft=(await f.state()).draft;
+   f.setFailRecord(true);await h.vote(f.vote(draft));assert.equal((await f.state()).draft.status,'submitting');
+   await h.vote(f.vote(draft,false));assert.equal((await f.state()).draft.status,'submitting');
    await h.message(f.message('Troque para 99 no débito',draft.preview_ids[0]));assert.equal(f.extracts,1);
-   f.setFailRecord(false);f.setFailReceipt(true);await h.vote(f.vote(draft));assert.equal((await f.repo.purchaseState()).draft.status,'saved');
+   f.setFailRecord(false);f.setFailReceipt(true);await h.vote(f.vote(draft));assert.equal((await f.state()).draft.status,'saved');
    assert.equal(f.requests[0].id,f.requests[1].id);assert.deepEqual(f.requests[0].items,f.requests[1].items);
    f.setFailReceipt(false);await f.factory().vote(f.vote(draft));assert.equal(f.records,2);assert.match(f.sent.at(-1).content,/já confirmado/);
   }finally{await f.close();}
@@ -78,8 +80,8 @@ for(const mode of ['sql','volume']){
   const f=await fixture(mode);try{
    let calls=0;
    const h=f.factory({extract:async(text,context)=>{calls++;return calls===1?output({status:'clarify',reason:'missing_amount',items:[{...items[0],amount_cents:null}]}):output();},transcribe:async()=> 'sim'});
-   await h.message(f.message('Paguei na padaria no débito'));const question=(await f.repo.purchaseState()).draft;
-   await h.message(f.message('35,50',question.question_ids[0]));const draft=(await f.repo.purchaseState()).draft;assert.equal(draft.status,'draft');
+   await h.message(f.message('Paguei na padaria no débito'));const question=(await f.state()).draft;
+   await h.message(f.message('35,50',question.question_ids[0]));const draft=(await f.state()).draft;assert.equal(draft.status,'draft');
    const wav=Buffer.alloc(44);wav.write('RIFF');wav.write('WAVE',8);
    await h.message(f.message('',draft.preview_ids[0],{type:'ptt',hasMedia:true,_data:{mimetype:'audio/wav',duration:2,size:44},downloadMedia:async()=>({mimetype:'audio/wav',data:wav.toString('base64')})}));
    assert.equal(f.records,0,'STT sim nunca confirma um registro');
@@ -102,9 +104,9 @@ test('Groq usa schema estrito e valida negócio; ausência/negativas e áudio s�
  assert.equal(await transcribePurchaseAudio(wav,'audio/wav',{env,fetcher:async(url,options)=>{assert.match(url,/transcriptions$/);assert.equal(options.body.get('language'),'pt');return {ok:true,json:async()=>({text:'Compra fictícia'})};}}),'Compra fictícia');
 });
 test('contrato do callback rejeita recibo incoerente e preserva UUID da confirmação',async()=>{
- const draft={id:randomUUID(),date:'2026-10-26',items};let body;
+ const draft={id:randomUUID(),owner_phone:phone,authorization_id:randomUUID(),authorization_version:'a'.repeat(64),date:'2026-10-26',items};let body;
  const result=await recordWhatsAppPurchase(draft,{env,fetcher:async(url,options)=>{assert.equal(url,'https://super.example/api/financeiro?resource=whatsapp-purchases');body=JSON.parse(options.body);return {ok:true,json:async()=>({ok:true,status:'saved',duplicate:false,request_id:draft.id,count:1,total_cents:3550,date:draft.date})};}});
- assert.equal(body.confirmed,true);assert.equal(body.sender_phone,phone);assert.equal(result.total_cents,3550);
+ assert.equal(body.confirmed,true);assert.equal(body.sender_phone,phone);assert.equal(body.authorization_id,draft.authorization_id);assert.equal(body.authorization_version,draft.authorization_version);assert.equal(result.total_cents,3550);
  await assert.rejects(recordWhatsAppPurchase(draft,{env,fetcher:async()=>({ok:true,json:async()=>({ok:true,status:'saved'})})}),/purchase_record_unverified/);
  const state=prunePurchaseState({draft:{status:'draft',items,expires_at:'2000-01-01T00:00:00Z'}});assert.ok(!state.draft || !state.draft.items);
 });
@@ -119,11 +121,67 @@ test('limite por minuto bloqueia chamadas adicionais e libera depois da janela',
 });
 test('pendente recupera prévia após reinício sem IA nova ou mudança do pedido submetido',async()=>{
  const f=await fixture('volume');try{
-  let h=f.factory();await h.message(f.message());const old=(await f.repo.purchaseState()).draft;
-  await h.message(f.message('/pendente'));const fresh=(await f.repo.purchaseState()).draft;
+  let h=f.factory();await h.message(f.message());const old=(await f.state()).draft;
+  await h.message(f.message('/pendente'));const fresh=(await f.state()).draft;
   assert.equal(f.extracts,1);assert.equal(fresh.id,old.id);assert.notEqual(fresh.poll_id,old.poll_id);
-  f.setFailRecord(true);await h.vote(f.vote(fresh));assert.equal((await f.repo.purchaseState()).draft.status,'submitting');
-  await f.factory().message(f.message('/pendente'));const restored=(await f.repo.purchaseState()).draft;
+  f.setFailRecord(true);await h.vote(f.vote(fresh));assert.equal((await f.state()).draft.status,'submitting');
+  await f.factory().message(f.message('/pendente'));const restored=(await f.state()).draft;
   assert.equal(restored.status,'submitting');assert.equal(restored.id,old.id);assert.deepEqual(restored.items,old.items);assert.equal(f.records,1);
+ }finally{await f.close();}
+});
+
+for(const mode of ['sql','volume'])test(`${mode}: pessoas autorizadas têm rascunhos isolados; revogação bloqueia áudio e confirmação`,async()=>{
+ const f=await fixture(mode);try{
+  const otherPhone='+5521900000000',otherAddress='5521900000000@c.us';
+  const other=await f.repo.saveRecipient(recipientInput({name:'Outra pessoa',phone:otherPhone,audience:'2',events:[],permissions:['purchases.record']}));
+  const h=f.factory();
+  const incoming=(body,quote=null,extra={})=>f.message(body,quote,{fromMe:false,from:otherAddress,to:address,...extra});
+  await h.message(f.message());await h.message(incoming('Anote padaria 35,50 no Pix'));
+  const own=(await f.state()).draft,remote=(await f.repo.purchaseState()).sessions[other.id].draft;
+  assert.notEqual(own.id,remote.id);assert.equal(remote.owner_phone,otherPhone);assert.equal(remote.authorization_id,other.id);
+  // Sending to someone else from the connected device is not their consent.
+  await h.message(f.message('confirmo',remote.preview_ids[0],{to:otherAddress}));assert.equal(f.records,0);
+  await h.message(incoming('confirmo',own.preview_ids[0]));assert.equal(f.records,0);
+  await h.vote(f.vote(remote,true,{voter:otherAddress,parentMessage:{to:otherAddress,id:{$1:remote.poll_id}}}));
+  assert.equal(f.records,1);assert.equal(f.requests[0].owner_phone,otherPhone);assert.equal((await f.state()).draft.status,'draft');
+  await f.repo.toggleRecipient(f.recipient.id,false);
+  await h.vote(f.vote(own));assert.equal(f.records,1);
+  const before=f.extracts;
+  await h.message(f.message('',null,{type:'ptt',hasMedia:true,_data:{mimetype:'audio/ogg',size:50,duration:2},downloadMedia:async()=>f.download()}));
+  assert.equal(f.downloads,0);assert.equal(f.extracts,before);
+  await f.repo.toggleRecipient(f.recipient.id,true);
+  await h.vote(f.vote(own));assert.equal(f.records,1,'old grant cannot confirm after reauthorization');
+  await h.message(f.message());const fresh=(await f.state()).draft;assert.notEqual(fresh.id,own.id);
+  await h.vote(f.vote(fresh));assert.equal(f.records,2);
+ }finally{await f.close();}
+});
+
+test('revogação durante interpretação descarta resultado e não publica prévia',async()=>{
+ const f=await fixture('volume');try{
+  const h=f.factory({extract:async()=>{await f.repo.toggleRecipient(f.recipient.id,false);return output();}});
+  await h.message(f.message());assert.equal(f.sent.length,0);assert.equal(f.records,0);
+ }finally{await f.close();}
+});
+
+test('reautorizar pedido incerto exige prévia nova e conserva UUID e itens',async()=>{
+ const f=await fixture('volume');try{
+  const h=f.factory();await h.message(f.message());const old=(await f.state()).draft;
+  f.setFailRecord(true);await h.vote(f.vote(old));assert.equal(f.records,1);
+  await f.repo.toggleRecipient(f.recipient.id,false);await f.repo.toggleRecipient(f.recipient.id,true);
+  await h.vote(f.vote(old));assert.equal(f.records,1);
+  await h.message(f.message('/pendente'));const fresh=(await f.state()).draft;
+  assert.equal(fresh.id,old.id);assert.deepEqual(fresh.items,old.items);assert.notEqual(fresh.poll_id,old.poll_id);assert.notEqual(fresh.authorization_version,old.authorization_version);
+  f.setFailRecord(false);await h.vote(f.vote(fresh));assert.equal(f.records,2);assert.equal((await f.state()).draft.status,'saved');
+  assert.equal(f.requests[0].id,f.requests[1].id);
+ }finally{await f.close();}
+});
+
+test('migração do rascunho legado mantém UUID do dono sem compartilhar com outras pessoas',async()=>{
+ const f=await fixture('volume');try{
+  const id=randomUUID();
+  await f.repo.changePurchaseState(f.worker,root=>{root.draft={id,owner_phone:phone,address,status:'submitting',code:'LEGADO-1',date:'2026-10-26',items,expires_at:'2026-10-26T15:15:00Z',preview_ids:['legacy-preview'],poll_id:'legacy-poll'};});
+  const h=f.factory();await h.message(f.message('/pendente'));const draft=(await f.state()).draft;
+  assert.equal(draft.id,id);assert.equal(draft.authorization_id,f.recipient.id);assert.equal((await f.repo.purchaseState()).draft,undefined);
+  await h.vote(f.vote(draft));assert.equal(f.records,1);assert.equal(f.requests[0].id,id);
  }finally{await f.close();}
 });

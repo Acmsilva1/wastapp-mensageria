@@ -7,7 +7,7 @@
     "demo": "node scripts/serve.mjs --demo",
     "check": "node scripts/check.mjs",
     "build": "node scripts/check.mjs",
-    "test": "node --test --experimental-test-isolation=none tests/contracts.test.mjs tests/diagnostics.test.mjs tests/groups.test.mjs tests/outbound-message.test.mjs tests/volume.test.mjs tests/water-replies.test.mjs tests/serialized-id-compat.test.mjs tests/message-replacement.test.mjs tests/whatsapp-purchases.test.mjs",
+    "test": "node --test --experimental-test-isolation=none tests/contracts.test.mjs tests/diagnostics.test.mjs tests/groups.test.mjs tests/outbound-message.test.mjs tests/volume.test.mjs tests/water-replies.test.mjs tests/serialized-id-compat.test.mjs tests/message-replacement.test.mjs tests/whatsapp-purchases.test.mjs tests/interaction-permissions.test.mjs",
     "secrets": "node scripts/generate-secrets.mjs",
     "worker": "node worker/index.mjs",
     "worker:local": "node --env-file=.env.local worker/index.mjs",

@@ -1,4 +1,4 @@
-import { recipientAccepts } from '../lib/domain.mjs';
+import { recipientAccepts, recipientPermits } from '../lib/domain.mjs';
 import { metadataLookup } from './group-target.mjs';
 import { serializedId as serialized } from './serialized-id-compat.mjs';
 
@@ -14,7 +14,7 @@ export function parseWaterAmount(value) {
 export function brazilDate(now=new Date()) {
   return new Intl.DateTimeFormat('en-CA',{timeZone:'America/Sao_Paulo',year:'numeric',month:'2-digit',day:'2-digit'}).format(now);
 }
-async function actorPhone(client, actor) {
+export async function actorPhone(client, actor) {
   const id=serialized(actor);
   if (/^\d{8,15}@c\.us$/.test(id || '')) return `+${id.split('@')[0]}`;
   if (!/^\d+@lid$/.test(id || '')) return null;
@@ -64,14 +64,17 @@ export function createWaterReplies({client,repo,worker,env=process.env,send=(add
       if (!recipientAccepts(recipient,job)) return;
       const phone=await actorPhone(client,actor);
       if (!phone) return;
-      const account=client.info?.wid?.user ? `+${client.info.wid.user}` : null;
+      const account=own ? await actorPhone(client,client.info?.wid) : null;
       // Self messages are accepted only when the connected number is explicitly authorized.
       if (own && phone!==account) return;
       if (recipient.target_type==='group') {
         if (recipient.group_id!==address) return;
-        const authorized=(await repo.recipients()).some(r=>r.target_type!=='group' && r.phone===phone && recipientAccepts(r,job));
+        const authorized=(await repo.recipients()).some(r=>r.phone===phone && recipientAccepts(r,job) && recipientPermits(r,'water.record'));
         if (!authorized) return;
-      } else if (recipient.phone!==phone) return;
+      } else if (recipient.phone!==phone || !recipientPermits(recipient,'water.record')) return;
+      // Revocation may happen while resolving WhatsApp metadata.
+      const current = recipient.target_type==='group' ? (await repo.recipients()).find(r=>r.phone===phone && recipientAccepts(r,job) && recipientPermits(r,'water.record')) : await repo.recipient(job.recipient_id);
+      if (!recipientPermits(current,'water.record') || !recipientAccepts(current,job)) return;
       await repo.heartbeat(worker);
       let text;
       try {

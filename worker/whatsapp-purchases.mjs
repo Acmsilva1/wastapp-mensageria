@@ -1,7 +1,8 @@
 import {randomUUID} from 'node:crypto';
 import {serializedId} from './serialized-id-compat.mjs';
 import {metadataLookup} from './group-target.mjs';
-import {brazilDate,parseWaterAmount} from './water-replies.mjs';
+import {interactionRecipient,interactionVersion} from '../lib/domain.mjs';
+import {brazilDate,parseWaterAmount,actorPhone} from './water-replies.mjs';
 import {extractPurchases,transcribePurchaseAudio,validateAudioMetadata,MAX_AUDIO_BYTES} from './purchase-groq.mjs';
 
 const TTL=15*60*1000,DAY=24*60*60*1000;
@@ -40,7 +41,7 @@ export function purchasePreview(draft) {
 const questions={missing_description:'Qual foi a compra? Informe a descrição.',missing_amount:'Qual foi o valor exato da compra?',missing_payment:'Você pagou no débito ou no Pix?',ambiguous_amount:'O valor ficou ambíguo. Informe o valor exato e a qual compra ele pertence.',ambiguous_payment:'Qual compra foi paga no débito e qual foi no Pix?'};
 export async function recordWhatsAppPurchase(draft,{env=process.env,fetcher=fetch}={}) {
  const config=purchaseConfig(env);if(!config)throw new Error('purchase_disabled');
- const body={action:'record',request_id:draft.id,sender_phone:config.phone,confirmed:true,date:draft.date,items:draft.items};
+ const body={action:'record',request_id:draft.id,sender_phone:draft.owner_phone,authorization_id:draft.authorization_id,authorization_version:draft.authorization_version,confirmed:true,date:draft.date,items:draft.items};
  const response=await fetcher(config.url,{method:'POST',headers:{Authorization:`Bearer ${config.token}`,'Content-Type':'application/json','User-Agent':'superapp-mensageria/1.0'},body:JSON.stringify(body),redirect:'error',signal:AbortSignal.timeout(20000)});
  if(!response.ok)throw new Error(response.status===409?'purchase_conflict':response.status===410?'purchase_expired':'purchase_record_unavailable');
  const result=await response.json(),total=draft.items.reduce((sum,item)=>sum+item.amount_cents,0);
@@ -48,27 +49,20 @@ export async function recordWhatsAppPurchase(draft,{env=process.env,fetcher=fetc
  return result;
 }
 
-export function createWhatsAppPurchases({client,repo,worker,env=process.env,Poll,extract=extractPurchases,transcribe=transcribePurchaseAudio,record=recordWhatsAppPurchase,now=()=>Date.now(),send=(address,content)=>client.sendMessage(address,content,{linkPreview:false,waitUntilMsgSent:true})}) {
+function createPurchaseSession({client,repo,worker,env=process.env,scope,authorize,Poll,extract=extractPurchases,transcribe=transcribePurchaseAudio,record=recordWhatsAppPurchase,now=()=>Date.now(),send=(address,content)=>client.sendMessage(address,content,{linkPreview:false,waitUntilMsgSent:true})}) {
  let tail=Promise.resolve(),queued=0;
  const config=purchaseConfig(env);
  const change=fn=>repo.changePurchaseState(worker,state=>{prunePurchaseState(state,now());return fn(state);});
  const load=()=>change(state=>structuredClone(state));
  async function identities() {
-  if(!config)return null;
-  const wid=serializedId(client.info?.wid);
-  if(!wid || !/^\d+@(c\.us|lid)$/.test(wid))return null;
-  const expected=config.phone.slice(1)+'@c.us';let aliases=[wid];
-  if(wid!==expected) {
-   const mappings=await metadataLookup(()=>client.getContactLidAndPhone([wid]),10000);
-   const match=mappings?.find(m=>m.pn===expected && (m.lid===wid || m.pn===wid));
-   if(!match)return null;aliases.push(match.pn,match.lid);
-  }else if(typeof client.getContactLidAndPhone==='function') {
-   const mappings=await metadataLookup(()=>client.getContactLidAndPhone([wid]),10000);
-   const match=mappings?.find(m=>m.pn===expected);if(match?.lid)aliases.push(match.lid);
-  }
-  return new Set(aliases.filter(Boolean));
+  if(!await authorize())return null;
+  const expected=config.phone.slice(1)+'@c.us';
+  const mappings=typeof client.getContactLidAndPhone==='function' ? await metadataLookup(()=>client.getContactLidAndPhone([expected]),10000) : [];
+  const match=mappings?.find(m=>m.pn===expected);
+  return new Set([expected,match?.lid].filter(Boolean));
  }
  async function outbound(address,content) {
+  if(!await authorize())throw new Error('purchase_forbidden');
   const message=await metadataLookup(()=>send(address,content),30000),id=serializedId(message?.id);
   if(!id)throw new Error('purchase_reply_unconfirmed');
   await change(state=>state.outbound.push({id,at:now()}));return id;
@@ -82,7 +76,7 @@ export function createWhatsAppPurchases({client,repo,worker,env=process.env,Poll
  }
  async function publish(draft,extracted,address) {
   const revision=(draft?.revision || 0)+1,id=draft?.id || randomUUID();
-  const prepared={id,owner_phone:config.phone,address,revision,code:`${id.slice(0,6).toUpperCase()}-${revision}`,date:extracted.date,items:extracted.items,status:'preparing',created_at:draft?.created_at || new Date(now()).toISOString(),expires_at:draft?.expires_at || new Date(now()+TTL).toISOString(),preview_ids:[],question_ids:[],poll_id:null};
+  const prepared={id,owner_phone:config.phone,authorization_id:scope.id,authorization_version:scope.version,address,revision,code:`${id.slice(0,6).toUpperCase()}-${revision}`,date:extracted.date,items:extracted.items,status:'preparing',created_at:draft?.created_at || new Date(now()).toISOString(),expires_at:draft?.expires_at || new Date(now()+TTL).toISOString(),preview_ids:[],question_ids:[],poll_id:null};
   await change(state=>{state.draft=prepared;});
   try {
    if(extracted.status==='clarify') {
@@ -97,6 +91,7 @@ export function createWhatsAppPurchases({client,repo,worker,env=process.env,Poll
   }catch(error){await change(state=>{if(state.draft?.id===id)state.draft={id,status:'failed',date:prepared.date,expires_at:prepared.expires_at};});throw error;}
  }
  async function confirm(draft,address) {
+  if(!await authorize() || draft.authorization_id!==scope.id || draft.authorization_version!==scope.version)return;
   if(draft.status==='saved') {
    await outbound(address,`✅ Registro já confirmado no Super App.\n${draft.count} ${draft.count===1?'item':'itens'} — ${money(draft.total_cents)}\nPagamento: débito/Pix. Categoria: Outros.`);
    return;
@@ -109,7 +104,7 @@ export function createWhatsAppPurchases({client,repo,worker,env=process.env,Poll
    await outbound(address,'🤖 Não consegui confirmar se o Super App gravou. O pedido ficou protegido, sem alterar os itens. Confirme novamente respondendo à mesma prévia ou usando sua enquete; a repetição não duplica a compra.');
    return;
   }
-  await change(state=>{state.draft={id:draft.id,status:'saved',address:draft.address,owner_phone:draft.owner_phone,code:draft.code,revision:draft.revision,date:draft.date,expires_at:draft.expires_at,count:result.count,total_cents:result.total_cents,preview_ids:draft.preview_ids,poll_id:draft.poll_id};});
+  await change(state=>{state.draft={id:draft.id,status:'saved',address:draft.address,owner_phone:draft.owner_phone,authorization_id:draft.authorization_id,authorization_version:draft.authorization_version,code:draft.code,revision:draft.revision,date:draft.date,expires_at:draft.expires_at,count:result.count,total_cents:result.total_cents,preview_ids:draft.preview_ids,poll_id:draft.poll_id};});
   try {await outbound(address,`✅ ${result.duplicate?'Registro já confirmado':'Compra registrada'} no Super App.\n${result.count} ${result.count===1?'item':'itens'} — ${money(result.total_cents)}\nPagamento: débito/Pix. Categoria: Outros.`);}catch{console.error('purchase_receipt_unconfirmed');}
  }
  async function cancel(draft,address) {
@@ -118,17 +113,18 @@ export function createWhatsAppPurchases({client,repo,worker,env=process.env,Poll
   await outbound(address,'❌ Rascunho cancelado. Nenhuma compra foi enviada para registro.');
  }
  async function analyze(text,draft,address) {
+  if(!await authorize())return;
   const extracted=await extract(text,draft?{items:draft.items,date:draft.date}:null,{env,now:new Date(now())});
   if(extracted.status==='cancel'){if(draft)await cancel(draft,address);return;}
   if(extracted.status==='ignore')return;
   if(extracted.status==='reject') {
    await outbound(address,extracted.reason==='different_date'?'🤖 Por aqui registro somente compras de hoje. Para outra data, use o Super App.':'🤖 Por aqui registro somente compras no débito ou Pix, sem crédito nem parcelas. Use o Super App para as demais formas.');return;
   }
-  await publish(draft,extracted,address);
+  if(await authorize())await publish(draft,extracted,address);
  }
  async function processMessage(message) {
-  if(!config || message.fromMe!==true || message.isForwarded || !['chat','audio','ptt'].includes(message.type))return false;
-  const address=serializedId(message.to),id=serializedId(message.id);
+  if(!config || message.isForwarded || !['chat','audio','ptt'].includes(message.type))return false;
+  const address=serializedId(message.fromMe ? message.to : message.from),id=serializedId(message.id);
   if(!address || !id || !/^\d+@(c\.us|lid)$/.test(address) || !Number.isFinite(message.timestamp) || Math.abs(now()/1000-message.timestamp)>TTL/1000)return false;
   const aliases=await identities();if(!aliases?.has(address))return false;
   if(message.type==='chat' && BOT_PREFIX.test(String(message.body || '').trim()))return false;
@@ -181,10 +177,11 @@ export function createWhatsAppPurchases({client,repo,worker,env=process.env,Poll
   if(audio)validateAudioMetadata(message); // Scope and metadata precede download and AI calls.
   if(!await reserve(id,audio?2:1))return true;
   if(audio) {
+   if(!await authorize())return true;
    const media=await metadataLookup(()=>message.downloadMedia(),15000);
    if(!media || typeof media.data!=='string' || media.data.length>Math.ceil(MAX_AUDIO_BYTES/3)*4+4)throw new Error('purchase_audio_invalid');
    const buffer=Buffer.from(media.data,'base64');
-   try{text=await transcribe(buffer,media.mimetype,{env});}finally{buffer.fill(0);media.data='';}
+   try{if(!await authorize())return true;text=await transcribe(buffer,media.mimetype,{env});}finally{buffer.fill(0);media.data='';}
   }
   // Audio can only produce/revise a draft. A transcription such as 'sim' never records.
   await analyze(text,linked?draft:null,address);text='';return true;
@@ -207,9 +204,70 @@ export function createWhatsAppPurchases({client,repo,worker,env=process.env,Poll
  }
  return {message:message=>queue(async()=>{
   try{return await processMessage(message);}catch(error){
-   const address=serializedId(message.to),aliases=await identities();
+   const address=serializedId(message.fromMe ? message.to : message.from),aliases=await identities();
    if(aliases?.has(address))await outbound(address,error?.message==='purchase_audio_invalid'?'🤖 Áudio recusado. Envie OGG, WAV ou M4A de até 60 segundos e 5 MB. Nenhuma compra foi enviada para registro.':error?.message==='purchase_rate_limited' || error?.message==='purchase_ai_rate_limited'?'🤖 Cheguei ao limite de consultas agora. Aguarde um pouco e envie a mensagem novamente. Nenhuma compra foi enviada para registro.':'🤖 Não consegui concluir esta solicitação agora. Tente novamente respondendo à mensagem atual ou consulte o Super App.');
    return false;
   }
  }),vote:vote=>queue(()=>processVote(vote))};
+}
+
+// Each authorized phone has its own durable draft, limits and confirmation IDs.
+// The outer queue also bounds aggregate work across all authorized people.
+export function createWhatsAppPurchases(options) {
+ const {client,repo,worker,env=process.env}=options;
+ let tail=Promise.resolve(),queued=0;
+ const config=purchaseConfig(env);
+ async function route(kind,event) {
+  if(!config)return false;
+  let address,actor;
+  if(kind==='message') {
+   if(event.isForwarded || !['chat','audio','ptt'].includes(event.type))return false;
+   address=serializedId(event.fromMe ? event.to : event.from);
+   actor=event.fromMe ? serializedId(client.info?.wid) : serializedId(event.from);
+  }else{
+   address=serializedId(event.parentMessage?.to);
+   actor=serializedId(event.voter);
+  }
+  if(!/^\d+@(c\.us|lid)$/.test(address || '') || !/^\d+@(c\.us|lid)$/.test(actor || ''))return false;
+  const phone=await actorPhone(client,actor);
+  if(!phone || await actorPhone(client,address)!==phone)return false;
+  const recipient=interactionRecipient(await repo.recipients(),phone,'purchases.record');
+  if(!recipient)return false;
+  const scope={id:recipient.id,version:interactionVersion(recipient)};
+  const authorize=async()=>{
+   const current=interactionRecipient(await repo.recipients(),phone,'purchases.record');
+   return Boolean(current && current.id===scope.id && interactionVersion(current)===scope.version);
+  };
+  const scopedRepo={
+   knownBotMessage:id=>repo.knownBotMessage(id),
+   changePurchaseState:(lease,fn)=>repo.changePurchaseState(lease,root=>{
+    root.sessions ||= {};
+    // Adopt the previous owner-only draft once, without changing its request ID.
+    if(!root.sessions[scope.id] && phone===config.phone && root.draft?.owner_phone===phone) {
+     root.sessions[scope.id]={processed:root.processed || [],outbound:root.outbound || [],calls:root.calls || [],draft:{...root.draft,authorization_id:scope.id,authorization_version:scope.version}};
+     delete root.draft;delete root.processed;delete root.outbound;delete root.calls;
+    }
+    const state=root.sessions[scope.id] ||= {};
+    if(state.version && state.version!==scope.version && state.draft) {
+     if(state.draft.status==='submitting') {
+      // Preserve the uncertain request and require a fresh preview/confirmation.
+      state.draft={...state.draft,authorization_version:scope.version,preview_ids:[],question_ids:[],poll_id:null};
+     } else state.draft=null;
+    }
+    state.version=scope.version;
+    return fn(state);
+   })
+  };
+  const state=await scopedRepo.changePurchaseState(worker,s=>({blocked:false}));
+  if(state===null)return false;
+  const handler=createPurchaseSession({...options,repo:scopedRepo,scope,authorize,env:{...env,WHATSAPP_PURCHASE_OWNER_PHONE:phone}});
+  return handler[kind](event);
+ }
+ function enqueue(kind,event) {
+  if(!config || queued>=8)return Promise.resolve(false);
+  queued++;
+  const task=tail.then(()=>route(kind,event)).catch(()=>{console.error('purchase_processing_failed');return false;});
+  tail=task.finally(()=>queued--);return task;
+ }
+ return {message:event=>enqueue('message',event),vote:event=>enqueue('vote',event)};
 }

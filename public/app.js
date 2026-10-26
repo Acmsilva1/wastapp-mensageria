@@ -1,5 +1,6 @@
 const $ = selector => document.querySelector(selector);
 const messages = {
+  water_alert_required: 'Para registrar água, habilite também o recebimento dos alertas de Água.',
   invalid_group_id: 'Selecione um grupo válido da lista da conta conectada.',
   group_unavailable: 'O grupo não está mais disponível para a conta conectada.',
   group_read_only: 'A conta conectada não tem permissão para enviar mensagens nesse grupo.',
@@ -20,7 +21,7 @@ const messages = {
   demo_no_pairing: 'O pareamento real não está disponível na demonstração.', pairing_confirmation_required: 'Confirme o reinício do pareamento.',
   invalid_credentials: 'Chave de administração incorreta.', authentication_required: 'Entre novamente no painel.',
   configuration_required: 'Configure as variáveis de ambiente e o banco antes de entrar.', service_unavailable: 'Serviço indisponível. Confira a conexão com o banco e as migrations.',
-  login_rate_limited: 'Muitas tentativas. Aguarde dez minutos.', invalid_input: 'Confira os campos e selecione ao menos um alerta.',
+  login_rate_limited: 'Muitas tentativas. Aguarde dez minutos.', invalid_input: 'Confira os campos e selecione ao menos um alerta ou uma permissão.',
   group_not_found: 'O grupo não está disponível na conta conectada. Atualize a lista e confira a participação da conta no grupo.',
   group_not_available: 'O grupo não está disponível na conta conectada. Atualize a lista de grupos.',
   group_catalog_unavailable: 'A lista de grupos ainda não está disponível. Aguarde o WhatsApp conectar e atualize a lista.',
@@ -69,7 +70,7 @@ function renderRecipients(rows) {
     const head = element('div', undefined, 'recipient-head');
     head.append(element('strong', r.name), element('span', r.enabled ? 'Ativo' : 'Inativo', `pill ${r.enabled ? 'ok' : 'off'}`));
     card.append(head, element('div', r.target_type === 'group' ? 'Grupo do WhatsApp' : r.phone, 'recipient-phone'), element('div', `Perfil: ${r.audience}`, 'recipient-profile'));
-    const tags = element('div', undefined, 'tags'); for (const type of r.events) tags.append(element('span', events[type] || type, 'tag')); card.append(tags);
+    const tags = element('div', undefined, 'tags'); for (const type of r.events) tags.append(element('span', events[type] || type, 'tag')); for (const permission of r.permissions || []) tags.append(element('span', permission === 'water.record' ? 'Pode registrar água' : 'Pode enviar compras', 'tag')); card.append(tags);
     const actions = element('div', undefined, 'recipient-actions');
     const edit = element('button', 'Editar', 'quiet'); edit.type = 'button'; edit.onclick = () => editRecipient(r);
     const toggle = element('button', r.enabled ? 'Desativar' : 'Ativar', 'quiet'); toggle.type = 'button';
@@ -89,6 +90,8 @@ function updateGroupOptions() {
 function updateTargetFields() {
   const form = $('#recipient-form');
   const group = form.elements.target_type.value === 'group';
+  $('#interaction-fields').hidden = group;
+  for (const input of form.querySelectorAll('[name=permissions]')) input.disabled = group;
   $('#phone-field').hidden = group; $('#group-field').hidden = !group;
   form.elements.phone.disabled = group; form.elements.phone.required = !group;
   form.elements.group_id.disabled = !group || Boolean(editingRecipient); form.elements.group_id.required = group && !editingRecipient;
@@ -143,6 +146,7 @@ function editRecipient(r) {
   updateGroupOptions(); updateTargetFields();
   form.elements.enabled.checked = r.enabled;
   for (const input of form.querySelectorAll('[name=events]')) input.checked = r.events.includes(input.value);
+  for (const input of form.querySelectorAll('[name=permissions]')) input.checked = (r.permissions || []).includes(input.value);
   $('#form-title').textContent = 'Editar destinatário'; $('#recipient-mode-label').textContent = 'Destino e perfil mantidos'; $('#cancel-edit').hidden = false; form.elements.name.focus();
 }
 function resetForm() { const form = $('#recipient-form'); editingRecipient = null; formGeneration++; form.reset(); form.elements.phone.readOnly = false; form.elements.audience.readOnly = false; $('#form-title').textContent = 'Adicionar destinatário'; $('#recipient-mode-label').textContent = 'Número ou grupo'; $('#group-status').textContent = ''; $('#cancel-edit').hidden = true; updateTargetFields(); }
@@ -188,7 +192,7 @@ $('#recipient-form').elements.target_type.onchange = () => { updateTargetFields(
 $('#recipient-form').elements.group_id.onchange = () => { const form = $('#recipient-form'); const group = groupCatalog.find(item => item.id === form.elements.group_id.value); if (group && !form.elements.name.value.trim()) form.elements.name.value = group.name; };
 $('#recipient-form').onsubmit = async event => { event.preventDefault(); if (savingRecipient) return; const form = event.currentTarget; const button = form.querySelector('button[type=submit], button.primary'); const data = new FormData(form);
   const targetType = editingRecipient?.target_type === 'group' ? 'group' : editingRecipient ? 'phone' : form.elements.target_type.value;
-  const payload = { name: data.get('name'), target_type: targetType, audience: editingRecipient?.audience || data.get('audience'), events: data.getAll('events'), enabled: form.elements.enabled.checked };
+  const payload = { name: data.get('name'), target_type: targetType, audience: editingRecipient?.audience || data.get('audience'), events: data.getAll('events'), permissions: targetType === 'phone' ? data.getAll('permissions') : [], enabled: form.elements.enabled.checked };
   if (targetType === 'group') payload.group_id = editingRecipient?.group_id || form.elements.group_id.value;
   else payload.phone = editingRecipient?.phone || data.get('phone');
   savingRecipient = true; button.disabled = true; $('#cancel-edit').disabled = true; updateTargetFields();
@@ -197,7 +201,7 @@ $('#recipient-form').onsubmit = async event => { event.preventDefault(); if (sav
 const paneCopy = {
   connect: ['Conectividade', 'Conta do WhatsApp, status e pareamento.'],
   logs: ['Logs', 'Últimos envios e eventos desta seção.'],
-  alerts: ['Adicionar alertas', 'Cadastre um número ou um grupo e escolha o que cada um recebe.']
+  alerts: ['Adicionar alertas', 'Cadastre destinatários e escolha os alertas e as permissões de cada pessoa.']
 };
 function showTab(name) {
   const [title, copy] = paneCopy[name] || paneCopy.connect;

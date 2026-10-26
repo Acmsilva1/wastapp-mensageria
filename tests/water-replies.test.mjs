@@ -38,12 +38,12 @@ test('callback usa HTTPS, segredo separado, caminho e corpo acordados; resposta 
 for(const mode of ['sql','volume']) test(`${mode}: persistencia, restart, voto, resposta, isolamento, falha e deduplicacao`,async()=>{
  let repo,db,dir;
  if(mode==='sql') {
-   db=new PGlite();for(const name of ['001_mensageria.sql','002_pairing_reset.sql','003_group_recipients.sql','004_water_replies.sql']) await db.exec(await readFile(new URL('../migrations/'+name,import.meta.url),'utf8'));
+   db=new PGlite();for(const name of ['001_mensageria.sql','002_pairing_reset.sql','003_group_recipients.sql','004_water_replies.sql','007_interaction_permissions.sql']) await db.exec(await readFile(new URL('../migrations/'+name,import.meta.url),'utf8'));
    repo=new Repository({query:(...args)=>db.query(...args),connect:async()=>({query:(...args)=>db.query(...args),release(){}})});
  } else {dir=await mkdtemp(path.join(os.tmpdir(),'water-replies-'));repo=await VolumeRepository.open(dir);}
  try {
  const phone='+5511900000000',worker=randomUUID();
- const r=await repo.saveRecipient(recipientInput({name:'Pessoa',phone,audience:'1',events:['health.water_progress']}));
+ const r=await repo.saveRecipient(recipientInput({name:'Pessoa',phone,audience:'1',permissions:['water.record'],events:['health.water_progress']}));
  await repo.lease(worker);const a=alert();await repo.enqueue(a);
  const job=await repo.claim(worker);await repo.bindWater(worker,job.id,'5511900000000@c.us','reminder-id');await repo.finish(worker,job.id,'sent',null,'poll-id');
  if(mode==='volume') repo=await VolumeRepository.open(dir);
@@ -78,5 +78,10 @@ for(const mode of ['sql','volume']) test(`${mode}: persistencia, restart, voto, 
  await handlers.vote({...gv,voter:'5511999999999@c.us'});assert.equal(requests.length,6);
  await repo.toggleRecipient(r.id,false);await handlers.vote(gv);assert.equal(requests.length,6);
  await repo.toggleRecipient(r.id,true);await repo.toggleRecipient(group.id,false);await handlers.vote(gv);assert.equal(requests.length,6);
+ client.info.wid={user:'123',_serialized:'123@lid'};
+ await handlers.message({type:'chat',hasQuotedMsg:true,fromMe:true,to:'5511900000000@c.us',body:'200 ml',getQuotedMessage:async()=>({fromMe:true,id:{$1:'reminder-id'}})});
+ assert.equal(requests.length,7,'connected LID resolves to authorized phone for self reply');
+ await repo.saveRecipient(recipientInput({name:'Pessoa',phone,audience:'1',events:['health.water_progress'],permissions:[]}));
+ await handlers.vote(vote());assert.equal(requests.length,7,'receiving water alone does not authorize recording');
  } finally {if(db) await db.close();if(dir) await rm(dir,{recursive:true,force:true});}
 });
