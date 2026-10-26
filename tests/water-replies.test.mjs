@@ -82,6 +82,8 @@ for(const mode of ['sql','volume']) test(`${mode}: persistencia, restart, voto, 
  await handlers.message({type:'chat',hasQuotedMsg:true,fromMe:true,to:'5511900000000@c.us',body:'200 ml',getQuotedMessage:async()=>({fromMe:true,id:{$1:'reminder-id'}})});
  assert.equal(requests.length,7,'connected LID resolves to authorized phone for self reply');
  await repo.saveRecipient(recipientInput({name:'Pessoa',phone,audience:'1',events:['health.water_progress'],permissions:[]}));
- await handlers.vote(vote());assert.equal(requests.length,7,'receiving water alone does not authorize recording');
+ await handlers.vote(vote());assert.equal(requests.length,8,'the single water switch authorizes recording');
+ await repo.saveRecipient(recipientInput({name:'Pessoa',phone,audience:'1',events:['health.diet_menu'],permissions:['water.record']}));
+ await handlers.vote(vote());assert.equal(requests.length,8,'turning water off revokes replies even with a legacy flag');
  } finally {if(db) await db.close();if(dir) await rm(dir,{recursive:true,force:true});}
 });

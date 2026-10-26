@@ -1,6 +1,5 @@
 const $ = selector => document.querySelector(selector);
 const messages = {
-  water_alert_required: 'Para registrar água, habilite também o recebimento dos alertas de Água.',
   invalid_group_id: 'Selecione um grupo válido da lista da conta conectada.',
   group_unavailable: 'O grupo não está mais disponível para a conta conectada.',
   group_read_only: 'A conta conectada não tem permissão para enviar mensagens nesse grupo.',
@@ -70,7 +69,7 @@ function renderRecipients(rows) {
     const head = element('div', undefined, 'recipient-head');
     head.append(element('strong', r.name), element('span', r.enabled ? 'Ativo' : 'Inativo', `pill ${r.enabled ? 'ok' : 'off'}`));
     card.append(head, element('div', r.target_type === 'group' ? 'Grupo do WhatsApp' : r.phone, 'recipient-phone'), element('div', `Perfil: ${r.audience}`, 'recipient-profile'));
-    const tags = element('div', undefined, 'tags'); for (const type of r.events) tags.append(element('span', events[type] || type, 'tag')); for (const permission of r.permissions || []) tags.append(element('span', permission === 'water.record' ? 'Pode registrar água' : 'Pode enviar compras', 'tag')); card.append(tags);
+    const tags = element('div', undefined, 'tags'); for (const type of r.events) tags.append(element('span', events[type] || type, 'tag')); if (r.permissions?.includes('purchases.record')) tags.append(element('span', 'Pode enviar compras', 'tag')); card.append(tags);
     const actions = element('div', undefined, 'recipient-actions');
     const edit = element('button', 'Editar', 'quiet'); edit.type = 'button'; edit.onclick = () => editRecipient(r);
     const toggle = element('button', r.enabled ? 'Desativar' : 'Ativar', 'quiet'); toggle.type = 'button';

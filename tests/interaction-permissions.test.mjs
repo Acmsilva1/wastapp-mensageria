@@ -12,11 +12,15 @@ import {createHandler} from '../lib/http-handler.mjs';
 const token='integration-test-only-at-least-32-characters';
 const input=(extra={})=>recipientInput({name:'Pessoa',phone:'+5511900000000',audience:'1',events:[],permissions:['purchases.record'],...extra});
 
-test('receber alertas não concede interação; grupos e permissões desconhecidas são recusados',()=>{
- assert.equal(recipientPermits(input({events:['health.water_progress'],permissions:[]}),'water.record'),false);
+test('Água unifica receber e registrar; compras seguem separadas e grupos não concedem escrita',()=>{
+ const water=input({events:['health.water_progress'],permissions:[]});
+ assert.equal(recipientPermits(water,'water.record'),true);assert.equal(recipientPermits(water,'purchases.record'),false);
+ assert.equal(recipientPermits({enabled:true,target_type:'phone',events:['health.water_progress'],permissions:[]},'water.record'),true);
+ assert.equal(recipientPermits({enabled:true,target_type:'phone',events:[],permissions:['water.record']},'water.record'),false);
+ assert.equal(recipientPermits({enabled:true,target_type:'group',events:['health.water_progress'],permissions:[]},'water.record'),false);
  assert.equal(recipientPermits(input(),'purchases.record'),true);
  assert.equal(recipientPermits({...input(),enabled:false},'purchases.record'),false);
- assert.throws(()=>input({permissions:['water.record']}),/water_alert_required/);
+ assert.throws(()=>input({permissions:['water.record']}),/invalid_input/);
  for(const extra of [{events:[],permissions:[]},{permissions:['admin']},{permissions:'purchases.record'},{phone:null,target_type:'group',group_id:'123@g.us'}])assert.throws(()=>input(extra),/invalid_input/);
 });
 
