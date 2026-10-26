@@ -34,7 +34,7 @@ async function fixture(mode){
   record:async(draft)=>{records++;requests.push(structuredClone(draft));if(failRecord)throw new Error('network_failure');return {ok:true,status:'saved',request_id:draft.id,duplicate:records>1,count:draft.items.length,total_cents:draft.items.reduce((s,i)=>s+i.amount_cents,0),date:draft.date};},
   send:async(to,content)=>{if(failReceipt&&typeof content==='string'&&content.startsWith('✅'))throw new Error('network_failure');const id='out-'+(++serial);sent.push({to,content,id});return {id:{$1:id}};},...extra});
  const message=(text='Gastei 35,50 na padaria no débito',quote=null,changes={})=>({type:'chat',body:text,id:{_serialized:'in-'+(++serial)},to:address,from:address,fromMe:true,timestamp:time/1000,hasQuotedMsg:Boolean(quote),getQuotedMessage:async()=>({fromMe:true,id:{$1:quote}}),...changes});
- const vote=(draft,confirm=true,changes={})=>({voter:{$1:address},parentMessage:{to:address,id:{$1:draft.poll_id}},selectedOptions:[{localId:confirm?0:1,name:confirm?'Confirmar':'Cancelar'}],...changes});
+ const vote=(draft,confirm=true,changes={})=>({voter:{$1:address},parentMessage:{to:address,id:{$1:draft.poll_id}},selectedOptions:[{localId:confirm?0:1,name:(draft.poll_choices || ['Confirmar','Cancelar'])[confirm?0:1]}],...changes});
  return {repo,recipient,state:async()=> (await repo.purchaseState()).sessions?.[recipient.id] || {},worker,db,dir,factory,message,vote,sent,requests,inputs,get extracts(){return extracts;},get records(){return records;},get downloads(){return downloads;},download(){downloads++;return null;},setFailRecord(v){failRecord=v;},setFailReceipt(v){failReceipt=v;},advance(ms){time+=ms;},close:async()=>{if(db)await db.close();if(dir)await rm(dir,{recursive:true,force:true});}};
 }
 
@@ -232,5 +232,69 @@ test('gastos por extenso e correlatos acionam o bot; perguntas usam o mascote am
   assert.equal((await f.state()).calls.length,3);
   const ask=f.factory({extract:async()=>output({status:'clarify',reason:'missing_amount',items:[{...items[0],amount_cents:null,payment:'debito_pix'}]})});
   await ask.message(f.message('gastei na padaria'));assert.match(f.sent.at(-1).content,/^🦉 /u);assert.doesNotMatch(f.sent.at(-1).content,/🤖|débito ou no Pix/u);
+ }finally{await f.close();}
+});
+
+for(const mode of ['sql','volume'])test(`${mode}: nova despesa substitui prévia não enviada e somente Sim da enquete atual registra`,async()=>{
+ const f=await fixture(mode);try{
+  const h=f.factory(),initial=f.message('gastei 10 na padaria');await h.message(initial);const old=(await f.state()).draft;
+  assert.deepEqual(old.poll_choices,['Sim','Não']);
+  assert.deepEqual(f.sent[1].content.pollOptions.map(option=>option.name),['Sim','Não']);assert.equal(f.sent[1].content.options.allowMultipleAnswers,false);
+  await h.message(f.message('200 ml'));await h.message(f.message('🦉 Mensagem automática'));await h.message(initial);
+  await h.message(f.message('Gastei 20 no mercado',null,{fromMe:false,from:'5511999999999@c.us'}));
+  assert.equal((await f.state()).draft.id,old.id);
+  await h.message(f.message('gastei 20 no mercado'));const fresh=(await f.state()).draft;
+  assert.notEqual(fresh.id,old.id);assert.equal(fresh.revision,1);assert.equal(f.records,0);assert.equal(f.inputs[1].context,null);
+  await h.vote(f.vote(old));await h.message(f.message('sim',old.preview_ids[0]));assert.equal(f.records,0);
+  await h.vote(f.vote(fresh,true,{selectedOptions:[{localId:0,name:'Não'}]}));assert.equal(f.records,0);
+  await f.factory().vote(f.vote(fresh));assert.equal(f.records,1);assert.equal(f.requests[0].id,fresh.id);
+  await f.factory().vote(f.vote(fresh));assert.equal(f.records,1,'restart preserves Sim/Não when saved');
+  await h.message(f.message('comprei 30 na feira'));const cancelled=(await f.state()).draft;
+  await h.vote(f.vote(cancelled,false));assert.equal(f.records,1);assert.equal((await f.state()).draft.status,'cancelled');
+ }finally{await f.close();}
+});
+
+for(const mode of ['sql','volume'])test(`${mode}: mensagem independente encerra rascunho; replay não cancela o próximo`,async()=>{
+ const f=await fixture(mode);try{
+  const h=f.factory();await h.message(f.message());const old=(await f.state()).draft;
+  const unrelated=f.message('oi');await h.message(unrelated);
+  assert.equal((await f.state()).draft.status,'cancelled');assert.equal(f.extracts,1);assert.equal(f.records,0);
+  await h.message(f.message('comprei 20 na farmácia'));const fresh=(await f.state()).draft;
+  assert.notEqual(fresh.id,old.id);
+  await h.message(unrelated);assert.equal((await f.state()).draft.id,fresh.id);assert.equal((await f.state()).draft.status,'draft');
+  await h.message(f.message('não'));assert.equal((await f.state()).draft.status,'cancelled');assert.equal(f.records,0);
+ }finally{await f.close();}
+});
+
+test('pedido com resultado incerto conserva UUID e itens ao chegar nova mensagem e voto Não',async()=>{
+ const f=await fixture('volume');try{
+  const h=f.factory();await h.message(f.message());const old=(await f.state()).draft;
+  f.setFailRecord(true);await h.vote(f.vote(old));assert.equal(f.records,1);
+  await h.message(f.message('gastei 99 no mercado'));await h.vote(f.vote(old,false));
+  const pending=(await f.state()).draft;assert.equal(pending.status,'submitting');assert.equal(pending.id,old.id);assert.deepEqual(pending.items,old.items);assert.equal(f.extracts,1);
+  f.setFailRecord(false);await h.vote(f.vote(pending));assert.equal(f.requests[1].id,old.id);assert.deepEqual(f.requests[1].items,old.items);
+ }finally{await f.close();}
+});
+
+test('enquete legada Confirmar/Cancelar continua válida e eco de Sim isolado não registra',async()=>{
+ const f=await fixture('volume');try{
+  const h=f.factory();await h.message(f.message());const fresh=(await f.state()).draft;
+  await h.message(f.message('sim'));assert.equal(f.records,0);assert.equal((await f.state()).draft.id,fresh.id);
+  await f.repo.changePurchaseState(f.worker,root=>{delete root.sessions[f.recipient.id].draft.poll_choices;});
+  const legacy=(await f.state()).draft;await h.vote(f.vote(legacy));assert.equal(f.records,1);
+ }finally{await f.close();}
+});
+
+test('áudio de água e confirmação falada não substituem compra pendente nem gravam',async()=>{
+ const f=await fixture('volume');try{
+  let transcript='';const h=f.factory({transcribe:async()=>transcript});
+  await h.message(f.message());const old=(await f.state()).draft;
+  const wav=Buffer.alloc(44);wav.write('RIFF');wav.write('WAVE',8);
+  for(const text of ['bebi 200 ml','bebi duzentos mililitros','sim']){
+   transcript=text;f.advance(61000);
+   await h.message(f.message('',null,{type:'ptt',hasMedia:true,_data:{mimetype:'audio/wav',duration:2,size:44},downloadMedia:async()=>({mimetype:'audio/wav',data:wav.toString('base64')})}));
+   assert.equal((await f.state()).draft.id,old.id);assert.equal((await f.state()).draft.status,'draft');assert.equal(f.extracts,1);assert.equal(f.records,0);
+  }
+  assert.match(f.sent.at(-1).content,/selecione Sim/);
  }finally{await f.close();}
 });

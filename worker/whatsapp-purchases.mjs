@@ -8,6 +8,7 @@ import {extractPurchases,transcribePurchaseAudio,validateAudioMetadata,validateP
 const TTL=15*60*1000,DAY=24*60*60*1000;
 const BOT_PREFIX=/^(?:🧾|🦉|🤖|✅|❌|💧|🍽️|📊|💰|🐷|🚗|🥗|💙|💪|✨)/u;
 const normalize=text=>String(text || '').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
+const waterText=text=>parseWaterAmount(text)!==null || /^(?:bebi|agua|água|hidratei).*\b(?:ml|mililitros?|litros?)\b/i.test(text);
 const money=cents=>(cents/100).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
 export function purchaseConfig(env=process.env) {
  try {
@@ -36,7 +37,7 @@ export function purchaseTextIntent(text,code='') {
 }
 export function purchasePreview(draft) {
  const lines=draft.items.map((item,index)=>`${index+1}. ${item.description} — ${money(item.amount_cents)}`);
- return `🧾 Confira a compra — ${draft.code}\n\n${lines.join('\n')}\n\nTotal: ${money(draft.items.reduce((sum,item)=>sum+item.amount_cents,0))}\nData: ${draft.date.split('-').reverse().join('/')} (hoje)\nDestino: Despesas variáveis · Débito/Pix\n\nAinda não registrei. Escolha Confirmar ou Cancelar na enquete. Também pode responder a esta prévia com “confirmo”, “cancelar” ou uma correção. Cada nova prévia invalida a anterior.`;
+ return `🧾 Confira a compra — ${draft.code}\n\n${lines.join('\n')}\n\nTotal: ${money(draft.items.reduce((sum,item)=>sum+item.amount_cents,0))}\nData: ${draft.date.split('-').reverse().join('/')} (hoje)\nDestino: Despesas variáveis · Débito/Pix\n\nAinda não registrei. Selecione Sim ou Não na enquete abaixo. Também pode responder a esta prévia com “confirmo”, “cancelar” ou uma correção. Cada nova prévia invalida a anterior.`;
 }
 const questions={missing_description:'Qual foi a compra? Informe a descrição.',missing_amount:'Qual foi o valor exato da compra?',ambiguous_amount:'O valor ficou ambíguo. Informe o valor exato e a qual compra ele pertence.'};
 export async function recordWhatsAppPurchase(draft,{env=process.env,fetcher=fetch}={}) {
@@ -85,8 +86,8 @@ function createPurchaseSession({client,repo,worker,env=process.env,scope,authori
     await change(state=>{if(state.draft?.id===id && state.draft.revision===revision){state.draft.status='clarification';state.draft.question_ids=[qid];}});
    }else{
     const preview=await outbound(address,purchasePreview(prepared));
-    const poll=await outbound(address,new Poll(`🧾 ${prepared.code}: confirmar o registro destas compras?`,['Confirmar','Cancelar'],{allowMultipleAnswers:false}));
-    await change(state=>{if(state.draft?.id===id && state.draft.revision===revision){state.draft.status='draft';state.draft.preview_ids=[preview,poll];state.draft.poll_id=poll;}});
+    const poll=await outbound(address,new Poll(`🧾 ${prepared.code}: confirmar o registro destas compras?`,['Sim','Não'],{allowMultipleAnswers:false}));
+    await change(state=>{if(state.draft?.id===id && state.draft.revision===revision){state.draft.status='draft';state.draft.preview_ids=[preview,poll];state.draft.poll_id=poll;state.draft.poll_choices=['Sim','Não'];}});
    }
   }catch(error){await change(state=>{if(state.draft?.id===id)state.draft={id,status:'failed',date:prepared.date,expires_at:prepared.expires_at};});throw error;}
  }
@@ -104,7 +105,7 @@ function createPurchaseSession({client,repo,worker,env=process.env,scope,authori
    await outbound(address,'🦉 Não consegui confirmar se o Super App gravou. O pedido ficou protegido, sem alterar os itens. Confirme novamente respondendo à mesma prévia ou usando sua enquete; a repetição não duplica a compra.');
    return;
   }
-  await change(state=>{state.draft={id:draft.id,status:'saved',address:draft.address,owner_phone:draft.owner_phone,authorization_id:draft.authorization_id,authorization_version:draft.authorization_version,code:draft.code,revision:draft.revision,date:draft.date,expires_at:draft.expires_at,count:result.count,total_cents:result.total_cents,preview_ids:draft.preview_ids,poll_id:draft.poll_id};});
+  await change(state=>{state.draft={id:draft.id,status:'saved',address:draft.address,owner_phone:draft.owner_phone,authorization_id:draft.authorization_id,authorization_version:draft.authorization_version,code:draft.code,revision:draft.revision,date:draft.date,expires_at:draft.expires_at,count:result.count,total_cents:result.total_cents,preview_ids:draft.preview_ids,poll_id:draft.poll_id,poll_choices:draft.poll_choices};});
   try {await outbound(address,`✅ ${result.duplicate?'Registro já confirmado':'Compra registrada'} no Super App.\n${result.count} ${result.count===1?'item':'itens'} — ${money(result.total_cents)}\nDespesas variáveis · Débito/Pix.`);}catch{console.error('purchase_receipt_unconfirmed');}
  }
  async function cancel(draft,address) {
@@ -143,8 +144,8 @@ function createPurchaseSession({client,repo,worker,env=process.env,scope,authori
    if(draft && ['draft','clarification','preparing','submitting'].includes(draft.status) && Array.isArray(draft.items)) {
     if(draft.status==='submitting') {
      const preview=await outbound(address,purchasePreview(draft));
-     const poll=await outbound(address,new Poll(`🧾 ${draft.code}: consultar a confirmação deste mesmo pedido?`,['Confirmar','Cancelar'],{allowMultipleAnswers:false}));
-     await change(state=>{if(state.draft?.id===draft.id){state.draft.preview_ids=[preview,poll];state.draft.poll_id=poll;}});
+     const poll=await outbound(address,new Poll(`🧾 ${draft.code}: consultar a confirmação deste mesmo pedido?`,['Sim','Não'],{allowMultipleAnswers:false}));
+     await change(state=>{if(state.draft?.id===draft.id){state.draft.preview_ids=[preview,poll];state.draft.poll_id=poll;state.draft.poll_choices=['Sim','Não'];}});
     }else{
      const extracted=validatePurchaseExtraction({status:'ready',reason:'none',date:draft.date,items:draft.items},brazilDate(new Date(now())));
      // A legacy ready preview keeps its exact items for idempotent recovery.
@@ -156,10 +157,23 @@ function createPurchaseSession({client,repo,worker,env=process.env,scope,authori
   }
   const linked=quoteId && draft && [...(draft.preview_ids || []),...(draft.question_ids || [])].includes(quoteId) && draft.address===address && draft.owner_phone===config.phone;
   if(quoteId && !linked)return false;
+  const replaceable=draft && ['draft','clarification','preparing'].includes(draft.status);
   if(!quoteId && message.type==='chat') {
    const text=String(message.body || '').trim();
-   if(parseWaterAmount(text)!==null || /^(?:bebi|agua|água|hidratei).*\b(?:ml|litro|litros)\b/i.test(text))return false;
-   if(!/pix|d[eé]bito|cr[eé]dito|gast(?:ei|o|ou|amos)|pagu(?:ei|ou)|pagamento|comprei|compra|cust(?:ou|aram)|desembols(?:ei|o)|saiu|sairam|saíram|ficou|deu|despesa|registr|anot|reais|r\$|\p{L}.*\d|\d.*\p{L}/iu.test(text))return false;
+   if(!text || waterText(text))return false;
+   if(draft && ['draft','clarification','preparing','submitting'].includes(draft.status)) {
+    const intent=purchaseTextIntent(text,draft.code);
+    if(intent!=='edit') {
+     if(!await reserve(id))return true;
+     if(intent==='cancel')await cancel(draft,address);
+     else await outbound(address,'🦉 Selecione Sim ou Não na enquete da prévia atual. Também pode responder diretamente à prévia com “sim” ou “não”.');
+     return true;
+    }
+   }
+   if(!/pix|d[eé]bito|cr[eé]dito|gast(?:ei|o|ou|amos)|pagu(?:ei|ou)|pagamento|comprei|compra|cust(?:ou|aram)|desembols(?:ei|o)|saiu|sairam|saíram|ficou|deu|despesa|registr|anot|reais|r\$|\p{L}.*\d|\d.*\p{L}/iu.test(text)) {
+    if(replaceable && await reserve(id)){await cancel(draft,address);return true;}
+    return false;
+   }
   }
   let text=String(message.body || '').trim();const audio=message.type!=='chat';
   if(linked && draft.status==='saved') {
@@ -172,9 +186,6 @@ function createPurchaseSession({client,repo,worker,env=process.env,scope,authori
    const intent=purchaseTextIntent(text,draft.code);
    if(intent!=='edit') {if(!await reserve(id))return true;if(intent==='cancel')await cancel(draft,address);else if(draft.preview_ids?.includes(quoteId))await confirm(draft,address);return true;}
   }
-  if(draft && ['draft','clarification','preparing','submitting'].includes(draft.status) && !linked) {
-   if(await reserve(id))await outbound(address,'🦉 Há um pedido pendente. Responda à sua prévia atual para corrigir, confirmar ou cancelar antes de iniciar outra compra.');return true;
-  }
   if(draft?.status==='submitting') {if(await reserve(id))await outbound(address,'🦉 Aguardo a confirmação deste pedido no Super App. Repita a confirmação na mesma prévia; por segurança não altero seus itens agora.');return true;}
   if(audio)validateAudioMetadata(message); // Scope and metadata precede download and AI calls.
   if(!await reserve(id,audio?2:1))return true;
@@ -184,7 +195,12 @@ function createPurchaseSession({client,repo,worker,env=process.env,scope,authori
    if(!media || typeof media.data!=='string' || media.data.length>Math.ceil(MAX_AUDIO_BYTES/3)*4+4)throw new Error('purchase_audio_invalid');
    const buffer=Buffer.from(media.data,'base64');
    try{if(!await authorize())return true;text=await transcribe(buffer,media.mimetype,{env});}finally{buffer.fill(0);media.data='';}
+   if(!linked && waterText(text))return false;
+   if(!linked && replaceable && purchaseTextIntent(text,draft.code)==='confirm') {
+    await outbound(address,'🦉 Para confirmar, selecione Sim na enquete da prévia atual ou responda diretamente à prévia por texto.');return true;
+   }
   }
+  if(!linked && replaceable)await cancel(draft,address);
   // Audio can only produce/revise a draft. A transcription such as 'sim' never records.
   await analyze(text,linked?draft:null,address);text='';return true;
  }
@@ -195,7 +211,8 @@ function createPurchaseSession({client,repo,worker,env=process.env,scope,authori
   const snapshot=await load(),draft=snapshot.draft;
   if(!draft || draft.address!==address || draft.owner_phone!==config.phone || draft.poll_id!==pollId || !['draft','submitting','saved'].includes(draft.status))return false;
   const option=vote.selectedOptions[0],intent=option.localId===0?'confirm':option.localId===1?'cancel':null;
-  if(!intent || option.name && normalize(option.name)!==(intent==='confirm'?'confirmar':'cancelar'))return false;
+  const choices=draft.poll_choices || ['Confirmar','Cancelar'];
+  if(!intent || option.name && normalize(option.name)!==normalize(choices[option.localId]))return false;
   if(draft.status==='saved') {await confirm(draft,address);return true;}
   if(intent==='cancel')await cancel(draft,address);else await confirm(draft,address);return true;
  }
