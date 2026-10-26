@@ -1,5 +1,6 @@
 import { recipientAccepts } from '../lib/domain.mjs';
 import { metadataLookup } from './group-target.mjs';
+import { serializedId as serialized } from './serialized-id-compat.mjs';
 
 export const WATER_AMOUNTS = Object.freeze([100,200,300,400,500,1000,2000]);
 export const WATER_OPTIONS = WATER_AMOUNTS.map(n => n>=1000 ? `${n/1000} L` : `${n} ml`);
@@ -13,7 +14,6 @@ export function parseWaterAmount(value) {
 export function brazilDate(now=new Date()) {
   return new Intl.DateTimeFormat('en-CA',{timeZone:'America/Sao_Paulo',year:'numeric',month:'2-digit',day:'2-digit'}).format(now);
 }
-const serialized=value => typeof value==='string' ? value : value?._serialized;
 async function actorPhone(client, actor) {
   const id=serialized(actor);
   if (/^\d{8,15}@c\.us$/.test(id || '')) return `+${id.split('@')[0]}`;
@@ -100,7 +100,7 @@ export function createWaterReplies({client,repo,worker,env=process.env,send=(add
       // Local IDs are authoritative for polls created with our fixed option order.
       const amount=WATER_AMOUNTS[option.localId];
       if(!amount || (option.name && parseWaterAmount(option.name)!==amount)) return Promise.resolve();
-      return queue({messageId:parent?.id?._serialized || serialized(vote.parentMsgKey),actor:vote.voter,address:parent?.to,amount});
+      return queue({messageId:serialized(parent?.id) || serialized(vote.parentMsgKey),actor:vote.voter,address:serialized(parent?.to),amount});
     },
     async message(message) {
       if(message.isForwarded || !message.hasQuotedMsg || !['chat',undefined].includes(message.type)) return;
@@ -109,7 +109,7 @@ export function createWaterReplies({client,repo,worker,env=process.env,send=(add
       const quoted=await metadataLookup(()=>message.getQuotedMessage(),10000);
       if(!quoted?.fromMe) return;
       const address=message.fromMe ? message.to : message.from;
-      return queue({messageId:quoted.id?._serialized,actor:message.author || (message.fromMe ? serialized(client.info?.wid) : message.from),address,amount,own:message.fromMe});
+      return queue({messageId:serialized(quoted.id),actor:message.author || (message.fromMe ? serialized(client.info?.wid) : message.from),address:serialized(address),amount,own:message.fromMe});
     }
   };
 }

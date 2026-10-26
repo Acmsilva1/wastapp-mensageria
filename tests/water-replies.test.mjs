@@ -55,7 +55,7 @@ for(const mode of ['sql','volume']) test(`${mode}: persistencia, restart, voto, 
   requests.push({p,amount});if(failed) throw new Error('network_failure');
   return {ok:true,duplicate:requests.length>1,profile_name:'Pessoa',amount_ml:amount,realizado_ml:400,meta_ml:2000,remaining_ml:1600};
  }});
- const vote=(changes={})=>({voter:'5511900000000@c.us',parentMessage:{id:{_serialized:'poll-id'},to:'5511900000000@c.us'},selectedOptions:[{localId:1,name:'200 ml'}],...changes});
+ const vote=(changes={})=>({voter:{$1:'5511900000000@c.us'},parentMessage:{id:{$1:'poll-id'},to:{$1:'5511900000000@c.us'}},selectedOptions:[{localId:1,name:'200 ml'}],...changes});
  await handlers.vote(vote());assert.equal(requests.length,1);assert.match(sent[0].text,/Registro realizado: 200 ml/);assert.match(sent[0].text,/Faltam 1600 ml/);
  await handlers.vote(vote());assert.match(sent[1].text,/já foi registrado/);
  await handlers.vote(vote({voter:'5511999999999@c.us'}));assert.equal(requests.length,2);
@@ -63,7 +63,7 @@ for(const mode of ['sql','volume']) test(`${mode}: persistencia, restart, voto, 
  await handlers.vote(vote({parentMessage:{id:{_serialized:'forged'},to:'5511900000000@c.us'}}));assert.equal(requests.length,2);
  await handlers.vote(vote({parentMessage:{id:{_serialized:'poll-id'},to:'5511999999999@c.us'}}));assert.equal(requests.length,2);
  await handlers.vote(vote({voter:'123@lid'}));assert.equal(requests.length,3);
- failed=true;await handlers.message({type:'chat',hasQuotedMsg:true,from:'5511900000000@c.us',body:'200 ml',getQuotedMessage:async()=>({fromMe:true,id:{_serialized:'reminder-id'}})});
+ failed=true;await handlers.message({type:'chat',hasQuotedMsg:true,from:'5511900000000@c.us',body:'200 ml',getQuotedMessage:async()=>({fromMe:true,id:{$1:'reminder-id'}})});
  assert.equal(requests.length,5);assert.match(sent.at(-1).text,/Não foi possível confirmar/);assert.doesNotMatch(sent.at(-1).text,/Registro realizado/);
  await repo.toggleRecipient(r.id,false);await handlers.vote(vote());assert.equal(requests.length,5);
  const old=alert('2020-01-01');await repo.toggleRecipient(r.id,true);await repo.enqueue(old);const oldJob=await repo.claim(worker);await repo.bindWater(worker,oldJob.id,'5511900000000@c.us','old-text');await repo.finish(worker,oldJob.id,'sent',null,'old-poll');

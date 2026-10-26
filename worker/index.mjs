@@ -14,6 +14,7 @@ import { resetPairingIfRequested, needsFreshPairing, qrRenewalStalled, removeSes
 import { applySessionFingerprint, sessionFingerprint } from './session-fingerprint.mjs';
 import { VolumeAuth, SESSION_CLIENT_ID } from './volume-auth.mjs';
 import { createWaterReplies, callbackConfig, WATER_OPTIONS, WATER_QUESTION } from './water-replies.mjs';
+import { serializedId, installSerializedIdCompatibility } from './serialized-id-compat.mjs';
 const require = createRequire(import.meta.url);
 const { Client, Poll } = require('whatsapp-web.js');
 
@@ -79,16 +80,16 @@ async function deliver(job) {
         new Promise((_, reject) => { sendTimer=setTimeout(()=>reject(new Error('send_timeout')),30000); })
       ]);
       clearTimeout(sendTimer);
-      if (!reminder.id?._serialized) throw new Error('water_binding_failed');
-      await repo.bindWater(worker,job.id,address,reminder.id._serialized);
+      if (!serializedId(reminder?.id)) throw new Error('water_binding_failed');
+      await repo.bindWater(worker,job.id,address,serializedId(reminder.id));
     }
     const message = await Promise.race([
       client.sendMessage(address, water ? new Poll(WATER_QUESTION, WATER_OPTIONS, {allowMultipleAnswers:false}) : whatsappOutbound(job), { linkPreview: false }),
       new Promise((_, reject) => { sendTimer = setTimeout(() => reject(new Error('send_timeout')), 30000); })
     ]);
     // 'sent' significa aceito pela biblioteca; nao significa lido ou entregue no celular.
-    if (!message?.id?._serialized) throw new Error('send_missing_message_id');
-    await repo.finish(worker, job.id, 'sent', null, message.id._serialized);
+    if (!serializedId(message?.id)) throw new Error('send_missing_message_id');
+    await repo.finish(worker, job.id, 'sent', null, serializedId(message.id));
   } catch (error) {
     const code = sending ? sendDiagnostic(error) : ['group_unavailable', 'group_read_only', 'group_lookup_timeout', 'number_not_registered'].includes(error.message) ? error.message : 'lookup_failed';
     console.error(JSON.stringify({event:'whatsapp_send_failed',code}));
@@ -166,6 +167,7 @@ async function run() {
     finally { groupsSyncedAt = Date.now(); }
   }
   client.on('ready', safeEvent(async () => {
+    await client.pupPage.evaluate(installSerializedIdCompatibility);
     lastQRAt = 0;
     qrGeneration++;
     const phone = client.info?.wid?.user;
