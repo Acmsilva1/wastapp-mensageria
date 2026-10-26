@@ -16,7 +16,7 @@ Painel administrativo em HTTPS, uma Function de controle e um Daemon Node.js com
 
 O projeto esta preparado para validacao de deploy; a conexao no container Vercel nao foi comprovada.
 Nenhuma migration ou alteracao de configuracao foi aplicada ao Supabase/Vercel automaticamente.
-O Super App nao foi alterado: seu adaptador de exemplo esta em `examples/superapp-client.mjs`.
+A integração de alertas e o retorno dos registros de água estão implementados no repositório separado `super-app-retorno-vercel`. O adaptador genérico de exemplo permanece em `examples/superapp-client.mjs`.
 
 ## Arquitetura
 
@@ -114,7 +114,7 @@ Um build estatico concluido nao prova que o WhatsApp ficou conectado.
 ## 4. Cadastrar destinatarios e integrar o app
 
 O campo Perfil do Super App deve receber o mesmo identificador enviado em `audience`.
-Para agua/dieta, use o UUID do perfil de saude correspondente. Para financeiro,
+Para agua/dieta, use o ID do perfil de saude correspondente, exatamente como enviado pelo Super App (numerico na versao atual, por exemplo `1`). Para financeiro,
 use o identificador do proprietario correspondente ao resumo; o adaptador do app
 deve fazer esse mapeamento explicitamente. Nao habilite perfis gerais implicitamente.
 
@@ -132,8 +132,8 @@ Content-Type: application/json
 {
   "source": "superapp",
   "event_type": "health.water_progress",
-  "audience": "UUID-DO-PERFIL",
-  "idempotency_key": "agua:2026-10-23:10:UUID-DO-PERFIL",
+  "audience": "1",
+  "idempotency_key": "agua:2026-10-23:10:00:1",
   "title": "Lembrete de agua",
   "message": "Seu lembrete do Super App."
 }
@@ -231,3 +231,22 @@ O rollback 003 recusa execucao enquanto houver destinatarios grupo, preservando 
 ## Atualizar o catalogo de grupos
 
 O botao Atualizar grupos solicita ao worker uma nova consulta de metadados do WhatsApp e aguarda a conclusao. O painel distingue offline, pendente, falha e consulta concluida sem resultados. Lista vazia nao comprova ausencia da conta no grupo. Esta correcao nao altera pareamento, nao reinicia sessao e nao exige migration adicional: utiliza os logs existentes para coordenar a atualizacao sob o lease do worker atual. A consulta armazena somente IDs e nomes de grupos.
+
+## Registrar água pelo WhatsApp
+
+O lembrete mantém o texto completo e envia em seguida uma enquete nativa de escolha única: **100, 200, 300, 400, 500 ml, 1 L ou 2 L**. Também é possível usar **Responder** no lembrete ou na enquete e escrever `200 ml`, `1 L` etc. O consumo é enviado ao Super App; a confirmação mostra o total do dia e quanto falta para a meta, ou que a meta foi atingida. Cada lembrete aceita um registro; alterar o voto não cria outro consumo. Para beber novamente, use outro lembrete ou o próprio app.
+
+Para ativar:
+
+1. No modo PostgreSQL, aplicar manualmente `migrations/004_water_replies.sql` depois das migrations 001–003. O modo volume persiste os campos no arquivo existente e não usa SQL.
+2. Definir **WHATSAPP_WATER_CALLBACK_TOKEN**, segredo exclusivo com pelo menos 32 caracteres, nos backends dos dois projetos, com o mesmo valor. Não reutilizar ADMIN_TOKEN ou INTEGRATION_TOKEN. Definir **SUPERAPP_API_ORIGIN** no worker com a origem HTTPS do Super App.
+3. No repositório `super-app-retorno-vercel`, aplicar a migration `20261025_whatsapp_water_day_guard.sql`; a migration de água em ml `20261013_saude_agua_ml.sql` também precisa já estar aplicada. Publicar as duas pontas e reiniciar o worker. Manter a integração de alertas existente, os destinatários de água ativos e a meta em ml configurada no Super App.
+4. Validar um lembrete novo e sua resposta real. Lembretes antigos enviados sem metadado assinado não se tornam interativos retroativamente.
+
+Contrato: o evento `health.water_progress` pode conter `water_prompt: {profile_id,date,dedupe_key,signature}`. O Super App assina HMAC-SHA256 de `JSON.stringify([profile_id,date,dedupe_key])` com o segredo de callback. A mensageria guarda esse metadado e os IDs reais das mensagens, sem expô-los no painel. O retorno é `POST /api/saude?resource=whatsapp-water`, Bearer com o segredo de callback, body `{water_prompt,amount_ml}`. O Super App valida assinatura, perfil, proprietário e dia em São Paulo, e deduplica pelo lembrete antes de somar os ml. O Telegram permanece independente.
+
+Em grupos, somente um participante com **cadastro individual ativo para o mesmo perfil e evento de água** pode registrar. O cadastro do grupo sozinho autoriza receber o aviso, mas não autoriza qualquer participante a mudar o indicador. A confirmação aparece na mesma conversa. Identidades `@lid` são resolvidas pelo mapeamento oficial da biblioteca; sem resolução válida, a alteração é recusada. Cadastre o telefone individual para autorizar quem registra pelo grupo; esse cadastro também recebe os avisos individuais.
+
+Sem configuração de callback, os avisos continuam em texto. Falhas de callback nunca geram confirmação de sucesso: o usuário recebe instrução para responder ao mesmo lembrete com o mesmo volume. Uma repetição mantém a chave e não duplica o consumo. A correlação continua após reiniciar o worker, e lembretes de outro dia são ignorados. O rollback 004 exige a aplicação parada e recusa remover correlações criadas nas últimas 48 horas.
+
+Seleção usa [Poll](https://docs.wwebjs.dev/Poll.html), [vote_update/PollVote](https://docs.wwebjs.dev/PollVote.html) e [getContactLidAndPhone](https://docs.wwebjs.dev/Client.html#getContactLidAndPhone) da biblioteca instalada. Responder por texto é a alternativa se o evento da enquete não chegar. Testes locais/mocks não comprovam votação ou entrega no celular; nenhum envio, banco real ou deploy foi executado nesta implementação.

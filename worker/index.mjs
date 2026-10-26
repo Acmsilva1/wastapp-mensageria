@@ -13,8 +13,9 @@ import { whatsappOutbound } from '../lib/outbound-message.mjs';
 import { resetPairingIfRequested, needsFreshPairing, qrRenewalStalled, removeSessionArtifacts } from './pairing-reset.mjs';
 import { applySessionFingerprint, sessionFingerprint } from './session-fingerprint.mjs';
 import { VolumeAuth, SESSION_CLIENT_ID } from './volume-auth.mjs';
+import { createWaterReplies, callbackConfig, WATER_OPTIONS, WATER_QUESTION } from './water-replies.mjs';
 const require = createRequire(import.meta.url);
-const { Client } = require('whatsapp-web.js');
+const { Client, Poll } = require('whatsapp-web.js');
 
 const worker = randomUUID();
 const repo = await openRepository();
@@ -69,8 +70,20 @@ async function deliver(job) {
     await repo.heartbeat(worker);
     if (stopping || !ready) return await repo.finish(worker, job.id, 'failed', 'connection_unavailable_before_send');
     sending = true;
+    const water = job.water_prompt && callbackConfig();
+    // Keep the full original reminder. The following single-choice poll is its input control.
+    let reminder;
+    if (water) {
+      reminder = await Promise.race([
+        client.sendMessage(address, `${whatsappOutbound(job)}\n\nEscolha o volume na enquete abaixo ou responda a esta mensagem com os ml.`, {linkPreview:false}),
+        new Promise((_, reject) => { sendTimer=setTimeout(()=>reject(new Error('send_timeout')),30000); })
+      ]);
+      clearTimeout(sendTimer);
+      if (!reminder.id?._serialized) throw new Error('water_binding_failed');
+      await repo.bindWater(worker,job.id,address,reminder.id._serialized);
+    }
     const message = await Promise.race([
-      client.sendMessage(address, whatsappOutbound(job), { linkPreview: false }),
+      client.sendMessage(address, water ? new Poll(WATER_QUESTION, WATER_OPTIONS, {allowMultipleAnswers:false}) : whatsappOutbound(job), { linkPreview: false }),
       new Promise((_, reject) => { sendTimer = setTimeout(() => reject(new Error('send_timeout')), 30000); })
     ]);
     // 'sent' significa aceito pela biblioteca; nao significa lido ou entregue no celular.
@@ -117,6 +130,11 @@ async function run() {
     puppeteer: { headless: true, ...(process.env.PUPPETEER_EXECUTABLE_PATH ? { executablePath: process.env.PUPPETEER_EXECUTABLE_PATH } : {}), args: ['--disable-dev-shm-usage'] } });
   let qrGeneration = 0;
   const safeEvent = action => (...args) => { action(...args).catch(() => close('state_write_failed').finally(() => process.exit(1))); };
+  const waterReplies=createWaterReplies({client,repo,worker});
+  const inbound=action => (...args) => { if (!ready || stopping) return; action(...args).catch(()=>console.error('water_reply_failed')); };
+  client.on('vote_update',inbound(vote=>waterReplies.vote(vote)));
+  // message_create includes own-account replies; authorization still requires its recipient registration.
+  client.on('message_create',inbound(message=>waterReplies.message(message)));
   async function noteGroupFailure(error) {
     const code = groupCatalogError(error);
     if (typeof repo.failGroupSync === 'function') await repo.failGroupSync(worker, code);
