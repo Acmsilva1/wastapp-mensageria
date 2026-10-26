@@ -45,3 +45,9 @@ Modelos: `openai/gpt-oss-120b` para extração com JSON Schema estrito e `whispe
 ## Validação
 
 Testes locais usam PostgreSQL embarcado e volume temporário, sem compras reais. Cobrem isolamento de dono, IDs, confirmação, correção, cancelamento, expiração, reinício, timeout, recibo perdido, limite de chamadas, áudio e contrato do callback. Os testes reais da Groq usam apenas frases fictícias e áudio sintético; não criam registros no Financeiro.
+
+## Diagnóstico de áudio
+
+O download de voz informa o MIME real ao WhatsApp: o SDK 1.34.7 omite esse campo e versões atuais do WhatsApp podem recusar PTT como `application/octet-stream`. A compatibilidade mantém limites de formato, duração e tamanho, sem retornar chaves ou URLs de mídia do navegador.
+
+Falhas de download, transcrição e interpretação têm orientações distintas. Os logs guardam apenas códigos técnicos permitidos (`purchase_audio_download_failed`, `purchase_transcription_failed`, etc.), sem áudio, transcrição, telefone ou resposta bruta do provedor.

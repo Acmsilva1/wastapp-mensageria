@@ -11,6 +11,7 @@ import {Repository} from '../lib/repository.mjs';
 import {VolumeRepository} from '../lib/volume-repository.mjs';
 import {createWhatsAppPurchases,recordWhatsAppPurchase,purchaseTextIntent,prunePurchaseState} from '../worker/whatsapp-purchases.mjs';
 import {extractPurchases,validatePurchaseExtraction,validateAudioMetadata,validateAudioBytes,transcribePurchaseAudio} from '../worker/purchase-groq.mjs';
+import {downloadAudioInPage,downloadPurchaseAudio} from '../worker/audio-media.mjs';
 const {Poll}=createRequire(import.meta.url)('whatsapp-web.js');
 const phone='+5511900000000',address='5511900000000@c.us',lid='123456789012345@lid';
 const env={WHATSAPP_PURCHASE_ENABLED:'true',WHATSAPP_PURCHASE_OWNER_PHONE:phone,WHATSAPP_PURCHASE_CALLBACK_TOKEN:'test-purchase-token-at-least-32-characters',SUPERAPP_API_ORIGIN:'https://super.example',GROQ_API_KEY:'test-only-placeholder'};
@@ -297,4 +298,45 @@ test('áudio de água e confirmação falada não substituem compra pendente nem
   }
   assert.match(f.sent.at(-1).content,/selecione Sim/);
  }finally{await f.close();}
+});
+
+test('download real do SDK omite MIME; compatibilidade informa OGG/Opus e limita mídia antes de devolver bytes',async()=>{
+ const previous=globalThis.window;let downloads=0;
+ const message={type:'ptt',size:4,duration:2,mimetype:'audio/ogg; codecs=opus',mediaData:{mediaStage:'RESOLVED'}};
+ const data=Uint8Array.from([79,103,103,83]).buffer;
+ const store={Msg:{get:()=>message}};
+ globalThis.window={require:name=>name==='WAWebCollections'?store:{downloadManager:{downloadAndMaybeDecrypt:async options=>{
+  downloads++;
+  if(!options.mimetype)throw Object.assign(new Error('Unexpected mimetype application/octet-stream for media type ptt'),{name:'InvalidMediaFileType'});
+  assert.equal(options.mimetype,'audio/ogg; codecs=opus');assert.equal(options.type,'ptt');return data;
+ }}},WWebJS:{arrayBufferToBase64Async:async bytes=>Buffer.from(bytes).toString('base64')}};
+ try{
+  const Message=createRequire(import.meta.url)('whatsapp-web.js/src/structures/Message');
+  const client={pupPage:{evaluate:(fn,arg)=>fn(arg)}};
+  await assert.rejects(Message.prototype.downloadMedia.call({client,hasMedia:true,id:{_serialized:'audio-id'}}),/Unexpected mimetype/);
+  const media=await downloadPurchaseAudio(client,{id:{$1:'audio-id'}});
+  assert.equal(media.mimetype,message.mimetype);assert.equal(Buffer.from(media.data,'base64').toString(),'OggS');
+  const count=downloads;message.size=20;
+  await assert.rejects(downloadAudioInPage({id:'audio-id',maxBytes:16}),/purchase_audio_download_failed/);assert.equal(downloads,count);
+  message.size=4;message.type='image';
+  await assert.rejects(downloadAudioInPage({id:'audio-id',maxBytes:16}),/purchase_audio_download_failed/);assert.equal(downloads,count);
+  message.type='ptt';
+  await assert.rejects(downloadAudioInPage({id:'audio-id',maxBytes:3}),/purchase_audio_download_failed/);
+ }finally{globalThis.window=previous;}
+});
+
+test('falhas de download, transcrição e interpretação dão orientações distintas sem registrar',async()=>{
+ const cases=[
+  {override:{downloadMedia:async()=>{throw new Error('private-download-details');}},reply:/Não consegui baixar/},
+  {transcribe:async()=>{throw new Error('purchase_transcription_failed');},reply:/não consegui transcrevê-lo/},
+  {extract:async()=>{throw new Error('purchase_extraction_invalid');},reply:/organizar os dados/}
+ ];
+ for(const scenario of cases){
+  const f=await fixture('volume');try{
+   const wav=Buffer.alloc(44);wav.write('RIFF');wav.write('WAVE',8);
+   const h=f.factory({transcribe:async()=> 'gastei dez reais na padaria',...(scenario.transcribe?{transcribe:scenario.transcribe}:{}),...(scenario.extract?{extract:scenario.extract}:{})});
+   await h.message(f.message('',null,{type:'ptt',hasMedia:true,_data:{mimetype:'audio/wav',duration:2,size:44},downloadMedia:async()=>({mimetype:'audio/wav',data:wav.toString('base64')}),...scenario.override}));
+   assert.match(f.sent.at(-1).content,scenario.reply);assert.doesNotMatch(f.sent.at(-1).content,/private-download-details/);assert.equal(f.records,0);
+  }finally{await f.close();}
+ }
 });

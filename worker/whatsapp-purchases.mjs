@@ -4,6 +4,7 @@ import {metadataLookup} from './group-target.mjs';
 import {interactionRecipient,interactionVersion} from '../lib/domain.mjs';
 import {brazilDate,parseWaterAmount,actorPhone} from './water-replies.mjs';
 import {extractPurchases,transcribePurchaseAudio,validateAudioMetadata,validatePurchaseExtraction,MAX_AUDIO_BYTES} from './purchase-groq.mjs';
+import {downloadPurchaseAudio} from './audio-media.mjs';
 
 const TTL=15*60*1000,DAY=24*60*60*1000;
 const BOT_PREFIX=/^(?:🧾|🦉|🤖|✅|❌|💧|🍽️|📊|💰|🐷|🚗|🥗|💙|💪|✨)/u;
@@ -191,7 +192,9 @@ function createPurchaseSession({client,repo,worker,env=process.env,scope,authori
   if(!await reserve(id,audio?2:1))return true;
   if(audio) {
    if(!await authorize())return true;
-   const media=await metadataLookup(()=>message.downloadMedia(),15000);
+   let media;
+   try{media=await metadataLookup(()=>downloadPurchaseAudio(client,message),15000);}
+   catch{throw new Error('purchase_audio_download_failed');}
    if(!media || typeof media.data!=='string' || media.data.length>Math.ceil(MAX_AUDIO_BYTES/3)*4+4)throw new Error('purchase_audio_invalid');
    const buffer=Buffer.from(media.data,'base64');
    try{if(!await authorize())return true;text=await transcribe(buffer,media.mimetype,{env});}finally{buffer.fill(0);media.data='';}
@@ -223,8 +226,17 @@ function createPurchaseSession({client,repo,worker,env=process.env,scope,authori
  }
  return {message:message=>queue(async()=>{
   try{return await processMessage(message);}catch(error){
+   const codes=new Set(['purchase_audio_invalid','purchase_audio_download_failed','purchase_transcription_failed','purchase_ai_rate_limited','purchase_rate_limited','purchase_ai_unavailable','purchase_extraction_invalid']);
+   const code=codes.has(error?.message)?error.message:'purchase_processing_failed';
+   console.error(JSON.stringify({event:'purchase_message_failed',code}));
    const address=serializedId(message.fromMe ? message.to : message.from),aliases=await identities();
-   if(aliases?.has(address))await outbound(address,error?.message==='purchase_audio_invalid'?'🦉 Áudio recusado. Envie OGG, WAV ou M4A de até 60 segundos e 5 MB. Nenhuma compra foi enviada para registro.':error?.message==='purchase_rate_limited' || error?.message==='purchase_ai_rate_limited'?'🦉 Cheguei ao limite de consultas agora. Aguarde um pouco e envie a mensagem novamente. Nenhuma compra foi enviada para registro.':'🦉 Não consegui concluir esta solicitação agora. Tente novamente respondendo à mensagem atual ou consulte o Super App.');
+   const reply=code==='purchase_audio_invalid'?'🦉 Áudio recusado. Envie OGG, WAV ou M4A de até 60 segundos e 5 MB. Nenhuma compra foi enviada para registro.'
+    :code==='purchase_audio_download_failed'?'🦉 Não consegui baixar o áudio do WhatsApp. Reenvie o áudio ou informe a despesa por texto. Nenhuma compra foi enviada para registro.'
+    :code==='purchase_transcription_failed'?'🦉 Recebi o áudio, mas não consegui transcrevê-lo. Tente gravar novamente com menos ruído ou envie a descrição e o valor por texto. Nenhuma compra foi enviada para registro.'
+    :code==='purchase_rate_limited' || code==='purchase_ai_rate_limited'?'🦉 Cheguei ao limite de consultas agora. Aguarde um pouco e envie a mensagem novamente. Nenhuma compra foi enviada para registro.'
+    :code==='purchase_extraction_invalid'?'🦉 Não consegui organizar os dados dessa despesa. Informe a descrição e o valor, por exemplo: gastei 10 reais na padaria. Nenhuma compra foi enviada para registro.'
+    :'🦉 Não consegui concluir esta solicitação agora. Tente novamente respondendo à mensagem atual ou consulte o Super App.';
+   if(aliases?.has(address))await outbound(address,reply);
    return false;
   }
  }),vote:vote=>queue(()=>processVote(vote))};
