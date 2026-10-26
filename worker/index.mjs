@@ -15,6 +15,7 @@ import { applySessionFingerprint, sessionFingerprint } from './session-fingerpri
 import { VolumeAuth, SESSION_CLIENT_ID } from './volume-auth.mjs';
 import { createWaterReplies, callbackConfig, WATER_OPTIONS, WATER_QUESTION } from './water-replies.mjs';
 import { serializedId, installSerializedIdCompatibility } from './serialized-id-compat.mjs';
+import {createMessageReplacement,revokeBotMessage} from './message-replacement.mjs';
 const require = createRequire(import.meta.url);
 const { Client, Poll } = require('whatsapp-web.js');
 
@@ -33,6 +34,7 @@ let activeSend;
 let closing;
 let lastQRAt = 0;
 const abort = new AbortController();
+const replacements=createMessageReplacement({repo,worker,revoke:(address,id)=>revokeBotMessage(client,address,id)});
 
 async function close(reason = 'stopped') {
   if (closing) return closing;
@@ -68,28 +70,34 @@ async function deliver(job) {
     const recipient = await repo.recipient(job.recipient_id);
     if (!recipientAccepts(recipient, job)) return await repo.finish(worker, job.id, 'cancelled', 'recipient_disabled');
     const address = await recipientAddress(client, repo, recipient);
-    await repo.heartbeat(worker);
-    if (stopping || !ready) return await repo.finish(worker, job.id, 'failed', 'connection_unavailable_before_send');
-    sending = true;
-    const water = job.water_prompt && callbackConfig();
-    // Keep the full original reminder. The following single-choice poll is its input control.
-    let reminder;
-    if (water) {
-      reminder = await Promise.race([
-        client.sendMessage(address, `${whatsappOutbound(job)}\n\nEscolha o volume na enquete abaixo ou responda a esta mensagem com os ml.`, {linkPreview:false}),
-        new Promise((_, reject) => { sendTimer=setTimeout(()=>reject(new Error('send_timeout')),30000); })
+    await replacements.withScope(job,address,async()=>{
+      await repo.heartbeat(worker);
+      if (stopping || !ready) return await repo.finish(worker, job.id, 'failed', 'connection_unavailable_before_send');
+      await replacements.begin(job,address);
+      const sentIds=[];
+      sending = true;
+      const water = job.water_prompt && callbackConfig();
+      // Keep the full original reminder. The following single-choice poll is its input control.
+      let reminder;
+      if (water) {
+        reminder = await Promise.race([
+          client.sendMessage(address, `${whatsappOutbound(job)}\n\nEscolha o volume na enquete abaixo ou responda a esta mensagem com os ml.`, {linkPreview:false,waitUntilMsgSent:true}),
+          new Promise((_, reject) => { sendTimer=setTimeout(()=>reject(new Error('send_timeout')),30000); })
+        ]);
+        clearTimeout(sendTimer);
+        if (!serializedId(reminder?.id)) throw new Error('water_binding_failed');
+        sentIds.push(serializedId(reminder.id));
+        await repo.bindWater(worker,job.id,address,serializedId(reminder.id));
+      }
+      const message = await Promise.race([
+        client.sendMessage(address, water ? new Poll(WATER_QUESTION, WATER_OPTIONS, {allowMultipleAnswers:false}) : whatsappOutbound(job), { linkPreview: false,waitUntilMsgSent:true }),
+        new Promise((_, reject) => { sendTimer = setTimeout(() => reject(new Error('send_timeout')), 30000); })
       ]);
-      clearTimeout(sendTimer);
-      if (!serializedId(reminder?.id)) throw new Error('water_binding_failed');
-      await repo.bindWater(worker,job.id,address,serializedId(reminder.id));
-    }
-    const message = await Promise.race([
-      client.sendMessage(address, water ? new Poll(WATER_QUESTION, WATER_OPTIONS, {allowMultipleAnswers:false}) : whatsappOutbound(job), { linkPreview: false }),
-      new Promise((_, reject) => { sendTimer = setTimeout(() => reject(new Error('send_timeout')), 30000); })
-    ]);
-    // 'sent' significa aceito pela biblioteca; nao significa lido ou entregue no celular.
-    if (!serializedId(message?.id)) throw new Error('send_missing_message_id');
-    await repo.finish(worker, job.id, 'sent', null, serializedId(message.id));
+      // 'sent' significa aceito pela biblioteca; nao significa lido ou entregue no celular.
+      if (!serializedId(message?.id)) throw new Error('send_missing_message_id');
+      sentIds.push(serializedId(message.id));
+      await replacements.complete(job,address,sentIds,water?2:1);
+    });
   } catch (error) {
     const code = sending ? sendDiagnostic(error) : ['group_unavailable', 'group_read_only', 'group_lookup_timeout', 'number_not_registered'].includes(error.message) ? error.message : 'lookup_failed';
     console.error(JSON.stringify({event:'whatsapp_send_failed',code}));
@@ -134,7 +142,7 @@ async function run() {
     puppeteer: { headless: true, ...(process.env.PUPPETEER_EXECUTABLE_PATH ? { executablePath: process.env.PUPPETEER_EXECUTABLE_PATH } : {}), args: ['--disable-dev-shm-usage'] } });
   let qrGeneration = 0;
   const safeEvent = action => (...args) => { action(...args).catch(() => close('state_write_failed').finally(() => process.exit(1))); };
-  const waterReplies=createWaterReplies({client,repo,worker});
+  const waterReplies=createWaterReplies({client,repo,worker,replacements});
   const inbound=action => (...args) => { if (!ready || stopping) return; action(...args).catch(()=>console.error('water_reply_failed')); };
   client.on('vote_update',inbound(vote=>waterReplies.vote(vote)));
   // message_create includes own-account replies; authorization still requires its recipient registration.
@@ -192,11 +200,20 @@ async function run() {
   }));
   await client.initialize();
   let cleanedAt = 0;
+  let deletionsAt = 0;
   while (!stopping) {
     if (Date.now() - cleanedAt > 3600000) { await repo.cleanup(); cleanedAt = Date.now(); }
     if (ready) {
+      if(Date.now()-deletionsAt>30000) {
+        deletionsAt=Date.now();
+        try {await replacements.cleanup();} catch {console.error('replacement_cleanup_failed');}
+      }
       const job = await repo.claim(worker);
-      if (job) { activeSend = deliver(job); await activeSend; activeSend = null; await sleep(2000); continue; }
+      if (job) {
+        activeSend=deliver(job); await activeSend; activeSend=null;
+        try {await replacements.cleanup();} catch {console.error('replacement_cleanup_failed');}
+        await sleep(2000); continue;
+      }
       if (Date.now() - groupsSyncedAt > 60000 || await repo.pendingGroupRefresh(worker)) {
         try { await syncGroups(); } catch (error) { groupsSyncedAt = Date.now(); await noteGroupFailure(error); }
       }

@@ -8,7 +8,7 @@ const {Client,Poll}=require('whatsapp-web.js');
 const {LoadUtils}=require('whatsapp-web.js/src/util/Injected/Utils.js');
 
 test('SDK e Utils reais: MsgKey $1 causava retorno vazio depois de enviar; compat retorna ID sem reenvio',async()=>{
- const prior=globalThis.window;let sends=0,counter=0;const messages=new Map();
+ const prior=globalThis.window;let sends=0,counter=0,sendGate=null;const messages=new Map();
  class MsgKey {
   constructor(options){this.fromMe=true;this.remote=options.to;this.id=options.id;this.$1=`true_${options.to._serialized}_${options.id}`;}
   toString(){return this.$1;}
@@ -24,7 +24,7 @@ test('SDK e Utils reais: MsgKey $1 causava retorno vazio depois de enviar; compa
   WAWebCollections:{Chat:{get:()=>chat},Msg:{get:key=>messages.get(key)}},
   WAWebSendMsgChatAction:{addAndSendMsgToChat(_chat,data){
     sends++;const model={...data,serialize(){return {...data,id:{...data.id}};}};
-    messages.set(data.id.toString(),model);return [Promise.resolve(model),Promise.resolve({})];
+    messages.set(data.id.toString(),model);return [Promise.resolve(model),sendGate || Promise.resolve({})];
   }}
  };
  try {
@@ -41,6 +41,13 @@ test('SDK e Utils reais: MsgKey $1 causava retorno vazio depois de enviar; compa
   const poll=await Client.prototype.sendMessage.call(client,chat.id._serialized,new Poll('Quanto bebeu?',['100 ml','200 ml'],{allowMultipleAnswers:false}));
   assert.equal(sends,3);assert.equal(poll.id._serialized,poll.id.$1);assert.equal(poll.type,'poll_creation');
   assert.equal(poll._data.pollSelectableOptionsCount,1);
+  let accept,reject,completed=false;sendGate=new Promise((resolve,rejector)=>{accept=resolve;reject=rejector;});
+  const waiting=Client.prototype.sendMessage.call(client,chat.id._serialized,'ficticio',{waitUntilMsgSent:true}).then(value=>{completed=true;return value;});
+  await new Promise(resolve=>setImmediate(resolve));assert.equal(completed,false,'modelo local nao basta enquanto o envio aguarda aceitacao');
+  accept({});assert.ok((await waiting).id._serialized);assert.equal(sends,4);
+  sendGate=new Promise((_resolve,rejector)=>{reject=rejector;});
+  const failed=Client.prototype.sendMessage.call(client,chat.id._serialized,'ficticio',{waitUntilMsgSent:true});
+  const rejection=assert.rejects(failed,/send rejected/);reject(new Error('send rejected'));await rejection;assert.equal(sends,5,'rejeicao nao causa reenvio');
   const legacy=new MsgKey({to:chat.id,id:'old'});legacy._serialized='old-value';legacy._serialized='new-value';
   assert.equal(legacy._serialized,'new-value');assert.equal(Object.getOwnPropertyDescriptor(legacy,'_serialized').enumerable,true);
  } finally {if(prior===undefined)delete globalThis.window;else globalThis.window=prior;}

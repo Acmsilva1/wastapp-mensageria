@@ -49,41 +49,49 @@ export async function requestWater(prompt, amount, {env=process.env,fetcher=fetc
     || data.remaining_ml!==Math.max(0,data.meta_ml-data.realizado_ml)) throw new Error('water_invalid_response');
   return data;
 }
-export function createWaterReplies({client,repo,worker,env=process.env,send=(address,text)=>client.sendMessage(address,text,{linkPreview:false}),request=requestWater}) {
+export function createWaterReplies({client,repo,worker,env=process.env,send=(address,text)=>client.sendMessage(address,text,{linkPreview:false}),request=requestWater,replacements=null}) {
   // A bounded queue prevents vote storms from creating parallel callbacks or unbounded memory.
   let tail=Promise.resolve(), pending=0;
   async function processAnswer({messageId,actor,address,amount,own=false}) {
     if (!messageId || !address || !WATER_AMOUNTS.includes(amount)) return;
-    const job=await repo.waterDelivery(messageId);
-    if (!job || job.water_address!==address || job.water_prompt.date!==brazilDate()) return;
-    const recipient=await repo.recipient(job.recipient_id);
-    if (!recipientAccepts(recipient,job)) return;
-    const phone=await actorPhone(client,actor);
-    if (!phone) return;
-    const account=client.info?.wid?.user ? `+${client.info.wid.user}` : null;
-    // Self messages are accepted only when the connected number is explicitly authorized.
-    if (own && phone!==account) return;
-    if (recipient.target_type==='group') {
-      if (recipient.group_id!==address) return;
-      const authorized=(await repo.recipients()).some(r=>r.target_type!=='group' && r.phone===phone && recipientAccepts(r,job));
-      if (!authorized) return;
-    } else if (recipient.phone!==phone) return;
-    await repo.heartbeat(worker);
-    try {
-      let result;
-      for(let attempt=0;attempt<2;attempt++) {
-        try { result=await request(job.water_prompt,amount,{env}); break; }
-        catch(error) { if(attempt || error.retryable===false || ['water_already_recorded','water_goal_required','water_prompt_expired','water_configuration_required','water_invalid_response'].includes(error.message)) throw error; }
-      }
+    const candidate=await repo.waterDelivery(messageId);
+    if(!candidate)return;
+    const action=async()=>{
+      // Re-read after taking the same scope lock as outbound delivery.
+      const job=await repo.waterDelivery(messageId);
+      if (!job || job.water_address!==address || job.water_prompt.date!==brazilDate()) return;
+      const recipient=await repo.recipient(job.recipient_id);
+      if (!recipientAccepts(recipient,job)) return;
+      const phone=await actorPhone(client,actor);
+      if (!phone) return;
+      const account=client.info?.wid?.user ? `+${client.info.wid.user}` : null;
+      // Self messages are accepted only when the connected number is explicitly authorized.
+      if (own && phone!==account) return;
+      if (recipient.target_type==='group') {
+        if (recipient.group_id!==address) return;
+        const authorized=(await repo.recipients()).some(r=>r.target_type!=='group' && r.phone===phone && recipientAccepts(r,job));
+        if (!authorized) return;
+      } else if (recipient.phone!==phone) return;
       await repo.heartbeat(worker);
-      await send(address,confirmation(result));
-    } catch(error) {
-      const text=error.message==='water_already_recorded' ? 'Este lembrete já foi registrado. Para outro consumo, use o app ou o próximo lembrete.'
-        : error.message==='water_goal_required' ? 'Configure sua meta diária de água em ml no Super App antes de registrar o consumo.'
-        : error.message==='water_prompt_expired' ? 'Este lembrete expirou. Use o lembrete de hoje.'
-        : 'Não foi possível confirmar o registro agora. Responda a este mesmo lembrete com o mesmo volume para tentar novamente sem duplicar.';
-      await send(address,text);
-    }
+      let text;
+      try {
+        let result;
+        for(let attempt=0;attempt<2;attempt++) {
+          try { result=await request(job.water_prompt,amount,{env}); break; }
+          catch(error) { if(attempt || error.retryable===false || ['water_already_recorded','water_goal_required','water_prompt_expired','water_configuration_required','water_invalid_response'].includes(error.message)) throw error; }
+        }
+        await repo.heartbeat(worker);
+        text=confirmation(result);
+      } catch(error) {
+        text=error.message==='water_already_recorded' ? 'Este lembrete já foi registrado. Para outro consumo, use o app ou o próximo lembrete.'
+          : error.message==='water_goal_required' ? 'Configure sua meta diária de água em ml no Super App antes de registrar o consumo.'
+          : error.message==='water_prompt_expired' ? 'Este lembrete expirou. Use o lembrete de hoje.'
+          : 'Não foi possível confirmar o registro agora. Responda a este mesmo lembrete com o mesmo volume para tentar novamente sem duplicar.';
+      }
+      const message=await send(address,text);
+      if(replacements)await replacements.trackFeedback(job,address,message);
+    };
+    return replacements ? replacements.withScope(candidate,address,action) : action();
   }
   function queue(answer) {
     if(pending>=30) return Promise.resolve();
