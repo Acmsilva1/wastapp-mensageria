@@ -10,7 +10,7 @@ import {recipientInput,interactionVersion} from '../lib/domain.mjs';
 import {Repository} from '../lib/repository.mjs';
 import {VolumeRepository} from '../lib/volume-repository.mjs';
 import {createWhatsAppPurchases,recordWhatsAppPurchase,purchaseTextIntent,prunePurchaseState} from '../worker/whatsapp-purchases.mjs';
-import {extractPurchases,validateAudioMetadata,validateAudioBytes,transcribePurchaseAudio} from '../worker/purchase-groq.mjs';
+import {extractPurchases,validatePurchaseExtraction,validateAudioMetadata,validateAudioBytes,transcribePurchaseAudio} from '../worker/purchase-groq.mjs';
 const {Poll}=createRequire(import.meta.url)('whatsapp-web.js');
 const phone='+5511900000000',address='5511900000000@c.us',lid='123456789012345@lid';
 const env={WHATSAPP_PURCHASE_ENABLED:'true',WHATSAPP_PURCHASE_OWNER_PHONE:phone,WHATSAPP_PURCHASE_CALLBACK_TOKEN:'test-purchase-token-at-least-32-characters',SUPERAPP_API_ORIGIN:'https://super.example',GROQ_API_KEY:'test-only-placeholder'};
@@ -96,7 +96,7 @@ test('Groq usa schema estrito e valida negócio; ausência/negativas e áudio s�
  const fetcher=async(url,options)=>{calls++;const body=JSON.parse(options.body);assert.equal(body.model,'openai/gpt-oss-120b');assert.equal(body.response_format.json_schema.strict,true);assert.equal(body.reasoning_effort,'medium');assert.equal(options.headers['User-Agent'],'superapp-mensageria/1.0');return {ok:true,json:async()=>({choices:[{message:{content:JSON.stringify(output())}}]})};};
  assert.equal((await extractPurchases('padaria35no débito',null,{env,fetcher,now:new Date('2026-10-26T15:00:00Z')})).status,'ready');
  assert.equal((await extractPurchases('comprei no crédito',null,{env,fetcher})).status,'reject');assert.equal(calls,1);
- assert.equal((await extractPurchases('padaria35',null,{env,fetcher,now:new Date('2026-10-26T15:00:00Z')})).reason,'missing_payment');
+ assert.equal((await extractPurchases('padaria35',null,{env,fetcher,now:new Date('2026-10-26T15:00:00Z')})).status,'ready');
  assert.equal(purchaseTextIntent('não salvar'),'cancel');assert.equal(purchaseTextIntent('pode registrar'),'confirm');
  assert.throws(()=>validateAudioMetadata({type:'ptt',hasMedia:true,_data:{mimetype:'audio/ogg',size:10,duration:61}}),/purchase_audio_invalid/);
  assert.throws(()=>validateAudioBytes(Buffer.from('bad'),'audio/ogg'),/purchase_audio_invalid/);
@@ -183,5 +183,54 @@ test('migração do rascunho legado mantém UUID do dono sem compartilhar com ou
   const h=f.factory();await h.message(f.message('/pendente'));const draft=(await f.state()).draft;
   assert.equal(draft.id,id);assert.equal(draft.authorization_id,f.recipient.id);assert.equal((await f.repo.purchaseState()).draft,undefined);
   await h.vote(f.vote(draft));assert.equal(f.records,1);assert.equal(f.requests[0].id,id);
+ }finally{await f.close();}
+});
+
+test('descrição e valor bastam; débito/Pix é único e ausências reais continuam pendentes',async()=>{
+ const date='2026-10-26';
+ for(const payment of [null,'debito','pix','debito_pix']){
+  const result=validatePurchaseExtraction(output({items:[{description:'Padaria',amount_cents:1000,payment}]}),date);
+  assert.equal(result.status,'ready');assert.equal(result.items[0].payment,'debito_pix');
+ }
+ for(const [field,reason] of [['description','missing_description'],['amount_cents','missing_amount']]){
+  const result=validatePurchaseExtraction(output({items:[{...items[0],[field]:null,payment:null}]}),date);
+  assert.equal(result.status,'clarify');assert.equal(result.reason,reason);
+ }
+ const missingLegacy=validatePurchaseExtraction(output({status:'clarify',reason:'missing_payment',items:[{...items[0],payment:null}]}),date);
+ assert.equal(missingLegacy.status,'ready');assert.equal(missingLegacy.reason,'none');
+ const f=await fixture('volume');try{
+  const h=f.factory({extract:(text,context)=>extractPurchases(text,context,{env,now:new Date(date+'T15:00:00Z'),fetcher:async(url,options)=>{
+   const body=JSON.parse(options.body);assert.deepEqual(body.response_format.json_schema.schema.properties.items.items.properties.payment.enum,['debito_pix']);
+   assert.match(body.messages[0].content,/descrição e valor bastam/);
+   return {ok:true,json:async()=>({choices:[{message:{content:JSON.stringify(output({items:[{description:'Padaria',amount_cents:1000,payment:'debito_pix'}]}))}}]})};
+  }})});
+  await h.message(f.message('gastei 10 reais na padaria'));const draft=(await f.state()).draft;
+  assert.equal(draft.status,'draft');assert.equal(draft.items[0].payment,'debito_pix');assert.equal(f.records,0);
+  assert.match(f.sent[0].content,/Padaria.*10,00/);assert.match(f.sent[0].content,/Despesas variáveis/);assert.doesNotMatch(f.sent[0].content,/Categoria|pagou no/);
+  await h.vote(f.vote(draft));assert.equal(f.records,1);
+ }finally{await f.close();}
+});
+
+for(const mode of ['sql','volume'])test(`${mode}: pergunta antiga de pagamento vira prévia via pendente; pedido submetido mantém pagamento legado`,async()=>{
+ const f=await fixture(mode);try{
+  const oldId=randomUUID();
+  await f.repo.changePurchaseState(f.worker,root=>{root.sessions={[f.recipient.id]:{version:interactionVersion(f.recipient),draft:{id:oldId,owner_phone:phone,address,authorization_id:f.recipient.id,authorization_version:interactionVersion(f.recipient),status:'clarification',date:'2026-10-26',items:[{...items[0],payment:null}],expires_at:'2026-10-26T15:15:00Z',question_ids:['old-payment-question']}}};});
+  const h=f.factory();await h.message(f.message('/pendente'));const draft=(await f.state()).draft;
+  assert.equal(f.extracts,0);assert.equal(draft.id,oldId);assert.equal(draft.status,'draft');assert.equal(draft.items[0].payment,'debito_pix');assert.equal(f.sent.length,2);
+  const raw=[{...items[0],payment:'pix'}];
+  await f.repo.changePurchaseState(f.worker,root=>{root.sessions[f.recipient.id].draft.items=raw;root.sessions[f.recipient.id].draft.status='submitting';});
+  await h.message(f.message('/pendente'));const retry=(await f.state()).draft;
+  assert.deepEqual(retry.items,raw);await h.vote(f.vote(retry));assert.deepEqual(f.requests[0].items,raw);
+ }finally{await f.close();}
+});
+
+test('gastos por extenso e correlatos acionam o bot; perguntas usam o mascote amigável',async()=>{
+ const f=await fixture('volume');try{
+  const h=f.factory({extract:async()=>output({status:'ignore',reason:'not_purchase',items:[]})});
+  for(const text of ['Desembolsei dez no estacionamento','O almoço custou quinze','Meu gasto foi vinte na feira'])await h.message(f.message(text));
+  // The custom extractor above replaces the fixture counter, so use persisted calls.
+  assert.equal((await f.state()).calls.length,3);
+  const ask=f.factory({extract:async()=>output({status:'clarify',reason:'missing_amount',items:[{...items[0],amount_cents:null,payment:'debito_pix'}]})});
+  await ask.message(f.message('gastei na padaria'));assert.match(f.sent.at(-1).content,/^🦉 /u);assert.doesNotMatch(f.sent.at(-1).content,/🤖|débito ou no Pix/u);
  }finally{await f.close();}
 });

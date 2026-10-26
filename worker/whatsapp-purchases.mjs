@@ -3,10 +3,10 @@ import {serializedId} from './serialized-id-compat.mjs';
 import {metadataLookup} from './group-target.mjs';
 import {interactionRecipient,interactionVersion} from '../lib/domain.mjs';
 import {brazilDate,parseWaterAmount,actorPhone} from './water-replies.mjs';
-import {extractPurchases,transcribePurchaseAudio,validateAudioMetadata,MAX_AUDIO_BYTES} from './purchase-groq.mjs';
+import {extractPurchases,transcribePurchaseAudio,validateAudioMetadata,validatePurchaseExtraction,MAX_AUDIO_BYTES} from './purchase-groq.mjs';
 
 const TTL=15*60*1000,DAY=24*60*60*1000;
-const BOT_PREFIX=/^(?:🧾|🤖|✅|❌|💧|🍽️|📊|💰|🐷|🚗|🥗|💙|💪|✨)/u;
+const BOT_PREFIX=/^(?:🧾|🦉|🤖|✅|❌|💧|🍽️|📊|💰|🐷|🚗|🥗|💙|💪|✨)/u;
 const normalize=text=>String(text || '').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
 const money=cents=>(cents/100).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
 export function purchaseConfig(env=process.env) {
@@ -35,10 +35,10 @@ export function purchaseTextIntent(text,code='') {
  return /^(?:sim|confirmo|confirmar|confirma|pode confirmar|pode registrar|pode salvar|pode lancar|sim pode registrar|sim confirmo|isso mesmo pode registrar)$/.test(value)?'confirm':'edit';
 }
 export function purchasePreview(draft) {
- const lines=draft.items.map((item,index)=>`${index+1}. ${item.description} — ${money(item.amount_cents)} — ${item.payment==='pix'?'Pix':'Débito'}`);
- return `🧾 Confira a compra — ${draft.code}\n\n${lines.join('\n')}\n\nTotal: ${money(draft.items.reduce((sum,item)=>sum+item.amount_cents,0))}\nData: ${draft.date.split('-').reverse().join('/')} (hoje)\nCategoria: Outros\n\nAinda não registrei. Escolha Confirmar ou Cancelar na enquete. Também pode responder a esta prévia com “confirmo”, “cancelar” ou uma correção. Cada nova prévia invalida a anterior.`;
+ const lines=draft.items.map((item,index)=>`${index+1}. ${item.description} — ${money(item.amount_cents)}`);
+ return `🧾 Confira a compra — ${draft.code}\n\n${lines.join('\n')}\n\nTotal: ${money(draft.items.reduce((sum,item)=>sum+item.amount_cents,0))}\nData: ${draft.date.split('-').reverse().join('/')} (hoje)\nDestino: Despesas variáveis · Débito/Pix\n\nAinda não registrei. Escolha Confirmar ou Cancelar na enquete. Também pode responder a esta prévia com “confirmo”, “cancelar” ou uma correção. Cada nova prévia invalida a anterior.`;
 }
-const questions={missing_description:'Qual foi a compra? Informe a descrição.',missing_amount:'Qual foi o valor exato da compra?',missing_payment:'Você pagou no débito ou no Pix?',ambiguous_amount:'O valor ficou ambíguo. Informe o valor exato e a qual compra ele pertence.',ambiguous_payment:'Qual compra foi paga no débito e qual foi no Pix?'};
+const questions={missing_description:'Qual foi a compra? Informe a descrição.',missing_amount:'Qual foi o valor exato da compra?',ambiguous_amount:'O valor ficou ambíguo. Informe o valor exato e a qual compra ele pertence.'};
 export async function recordWhatsAppPurchase(draft,{env=process.env,fetcher=fetch}={}) {
  const config=purchaseConfig(env);if(!config)throw new Error('purchase_disabled');
  const body={action:'record',request_id:draft.id,sender_phone:draft.owner_phone,authorization_id:draft.authorization_id,authorization_version:draft.authorization_version,confirmed:true,date:draft.date,items:draft.items};
@@ -80,8 +80,8 @@ function createPurchaseSession({client,repo,worker,env=process.env,scope,authori
   await change(state=>{state.draft=prepared;});
   try {
    if(extracted.status==='clarify') {
-    const question=questions[extracted.reason] || 'Informe a descrição, o valor exato e se pagou no débito ou no Pix.';
-    const qid=await outbound(address,`🤖 ${question}\nResponda diretamente a esta mensagem. Ainda não registrei nada.`);
+    const question=questions[extracted.reason] || 'Informe a descrição e o valor exato da despesa.';
+    const qid=await outbound(address,`🦉 ${question}\nResponda diretamente a esta mensagem. Ainda não registrei nada.`);
     await change(state=>{if(state.draft?.id===id && state.draft.revision===revision){state.draft.status='clarification';state.draft.question_ids=[qid];}});
    }else{
     const preview=await outbound(address,purchasePreview(prepared));
@@ -93,7 +93,7 @@ function createPurchaseSession({client,repo,worker,env=process.env,scope,authori
  async function confirm(draft,address) {
   if(!await authorize() || draft.authorization_id!==scope.id || draft.authorization_version!==scope.version)return;
   if(draft.status==='saved') {
-   await outbound(address,`✅ Registro já confirmado no Super App.\n${draft.count} ${draft.count===1?'item':'itens'} — ${money(draft.total_cents)}\nPagamento: débito/Pix. Categoria: Outros.`);
+   await outbound(address,`✅ Registro já confirmado no Super App.\n${draft.count} ${draft.count===1?'item':'itens'} — ${money(draft.total_cents)}\nDespesas variáveis · Débito/Pix.`);
    return;
   }
   if(!['draft','submitting'].includes(draft.status))return;
@@ -101,14 +101,14 @@ function createPurchaseSession({client,repo,worker,env=process.env,scope,authori
   await change(state=>{if(state.draft?.id===draft.id)state.draft.status='submitting';});
   let result;
   try {result=await record(draft,{env});}catch{
-   await outbound(address,'🤖 Não consegui confirmar se o Super App gravou. O pedido ficou protegido, sem alterar os itens. Confirme novamente respondendo à mesma prévia ou usando sua enquete; a repetição não duplica a compra.');
+   await outbound(address,'🦉 Não consegui confirmar se o Super App gravou. O pedido ficou protegido, sem alterar os itens. Confirme novamente respondendo à mesma prévia ou usando sua enquete; a repetição não duplica a compra.');
    return;
   }
   await change(state=>{state.draft={id:draft.id,status:'saved',address:draft.address,owner_phone:draft.owner_phone,authorization_id:draft.authorization_id,authorization_version:draft.authorization_version,code:draft.code,revision:draft.revision,date:draft.date,expires_at:draft.expires_at,count:result.count,total_cents:result.total_cents,preview_ids:draft.preview_ids,poll_id:draft.poll_id};});
-  try {await outbound(address,`✅ ${result.duplicate?'Registro já confirmado':'Compra registrada'} no Super App.\n${result.count} ${result.count===1?'item':'itens'} — ${money(result.total_cents)}\nPagamento: débito/Pix. Categoria: Outros.`);}catch{console.error('purchase_receipt_unconfirmed');}
+  try {await outbound(address,`✅ ${result.duplicate?'Registro já confirmado':'Compra registrada'} no Super App.\n${result.count} ${result.count===1?'item':'itens'} — ${money(result.total_cents)}\nDespesas variáveis · Débito/Pix.`);}catch{console.error('purchase_receipt_unconfirmed');}
  }
  async function cancel(draft,address) {
-  if(draft.status==='submitting') {await outbound(address,'🤖 Este pedido já foi enviado para registro e ainda não tive a confirmação. Não posso afirmar que foi cancelado. Confirme novamente na mesma prévia para consultar o resultado sem duplicar.');return;}
+  if(draft.status==='submitting') {await outbound(address,'🦉 Este pedido já foi enviado para registro e ainda não tive a confirmação. Não posso afirmar que foi cancelado. Confirme novamente na mesma prévia para consultar o resultado sem duplicar.');return;}
   await change(state=>{state.draft={id:draft.id,status:'cancelled',date:draft.date,expires_at:draft.expires_at};});
   await outbound(address,'❌ Rascunho cancelado. Nenhuma compra foi enviada para registro.');
  }
@@ -118,7 +118,7 @@ function createPurchaseSession({client,repo,worker,env=process.env,scope,authori
   if(extracted.status==='cancel'){if(draft)await cancel(draft,address);return;}
   if(extracted.status==='ignore')return;
   if(extracted.status==='reject') {
-   await outbound(address,extracted.reason==='different_date'?'🤖 Por aqui registro somente compras de hoje. Para outra data, use o Super App.':'🤖 Por aqui registro somente compras no débito ou Pix, sem crédito nem parcelas. Use o Super App para as demais formas.');return;
+   await outbound(address,extracted.reason==='different_date'?'🦉 Por aqui registro somente compras de hoje. Para outra data, use o Super App.':'🦉 Por aqui registro somente compras no débito ou Pix, sem crédito nem parcelas. Use o Super App para as demais formas.');return;
   }
   if(await authorize())await publish(draft,extracted,address);
  }
@@ -146,10 +146,12 @@ function createPurchaseSession({client,repo,worker,env=process.env,scope,authori
      const poll=await outbound(address,new Poll(`🧾 ${draft.code}: consultar a confirmação deste mesmo pedido?`,['Confirmar','Cancelar'],{allowMultipleAnswers:false}));
      await change(state=>{if(state.draft?.id===draft.id){state.draft.preview_ids=[preview,poll];state.draft.poll_id=poll;}});
     }else{
-     const missing=[['description','missing_description'],['amount_cents','missing_amount'],['payment','missing_payment']].find(([field])=>draft.items.some(item=>item[field]===null));
-     await publish(draft,{status:missing?'clarify':'ready',reason:missing?.[1] || 'none',date:draft.date,items:draft.items},address);
+     const extracted=validatePurchaseExtraction({status:'ready',reason:'none',date:draft.date,items:draft.items},brazilDate(new Date(now())));
+     // A legacy ready preview keeps its exact items for idempotent recovery.
+     if(draft.status!=='clarification')extracted.items=draft.items;
+     await publish(draft,extracted,address);
     }
-   }else await outbound(address,'🤖 Não há compra pendente. Envie a descrição, o valor e se pagou no débito ou Pix.');
+   }else await outbound(address,'🦉 Não há compra pendente. Envie a descrição e o valor da despesa. Exemplo: gastei 10 reais na padaria.');
    return true;
   }
   const linked=quoteId && draft && [...(draft.preview_ids || []),...(draft.question_ids || [])].includes(quoteId) && draft.address===address && draft.owner_phone===config.phone;
@@ -157,7 +159,7 @@ function createPurchaseSession({client,repo,worker,env=process.env,scope,authori
   if(!quoteId && message.type==='chat') {
    const text=String(message.body || '').trim();
    if(parseWaterAmount(text)!==null || /^(?:bebi|agua|água|hidratei).*\b(?:ml|litro|litros)\b/i.test(text))return false;
-   if(!/pix|d[eé]bito|cr[eé]dito|gastei|paguei|comprei|compra|despesa|registr|anot|reais|r\$|\p{L}.*\d|\d.*\p{L}/iu.test(text))return false;
+   if(!/pix|d[eé]bito|cr[eé]dito|gast(?:ei|o|ou|amos)|pagu(?:ei|ou)|pagamento|comprei|compra|cust(?:ou|aram)|desembols(?:ei|o)|saiu|sairam|saíram|ficou|deu|despesa|registr|anot|reais|r\$|\p{L}.*\d|\d.*\p{L}/iu.test(text))return false;
   }
   let text=String(message.body || '').trim();const audio=message.type!=='chat';
   if(linked && draft.status==='saved') {
@@ -171,9 +173,9 @@ function createPurchaseSession({client,repo,worker,env=process.env,scope,authori
    if(intent!=='edit') {if(!await reserve(id))return true;if(intent==='cancel')await cancel(draft,address);else if(draft.preview_ids?.includes(quoteId))await confirm(draft,address);return true;}
   }
   if(draft && ['draft','clarification','preparing','submitting'].includes(draft.status) && !linked) {
-   if(await reserve(id))await outbound(address,'🤖 Há um pedido pendente. Responda à sua prévia atual para corrigir, confirmar ou cancelar antes de iniciar outra compra.');return true;
+   if(await reserve(id))await outbound(address,'🦉 Há um pedido pendente. Responda à sua prévia atual para corrigir, confirmar ou cancelar antes de iniciar outra compra.');return true;
   }
-  if(draft?.status==='submitting') {if(await reserve(id))await outbound(address,'🤖 Aguardo a confirmação deste pedido no Super App. Repita a confirmação na mesma prévia; por segurança não altero seus itens agora.');return true;}
+  if(draft?.status==='submitting') {if(await reserve(id))await outbound(address,'🦉 Aguardo a confirmação deste pedido no Super App. Repita a confirmação na mesma prévia; por segurança não altero seus itens agora.');return true;}
   if(audio)validateAudioMetadata(message); // Scope and metadata precede download and AI calls.
   if(!await reserve(id,audio?2:1))return true;
   if(audio) {
@@ -205,7 +207,7 @@ function createPurchaseSession({client,repo,worker,env=process.env,scope,authori
  return {message:message=>queue(async()=>{
   try{return await processMessage(message);}catch(error){
    const address=serializedId(message.fromMe ? message.to : message.from),aliases=await identities();
-   if(aliases?.has(address))await outbound(address,error?.message==='purchase_audio_invalid'?'🤖 Áudio recusado. Envie OGG, WAV ou M4A de até 60 segundos e 5 MB. Nenhuma compra foi enviada para registro.':error?.message==='purchase_rate_limited' || error?.message==='purchase_ai_rate_limited'?'🤖 Cheguei ao limite de consultas agora. Aguarde um pouco e envie a mensagem novamente. Nenhuma compra foi enviada para registro.':'🤖 Não consegui concluir esta solicitação agora. Tente novamente respondendo à mensagem atual ou consulte o Super App.');
+   if(aliases?.has(address))await outbound(address,error?.message==='purchase_audio_invalid'?'🦉 Áudio recusado. Envie OGG, WAV ou M4A de até 60 segundos e 5 MB. Nenhuma compra foi enviada para registro.':error?.message==='purchase_rate_limited' || error?.message==='purchase_ai_rate_limited'?'🦉 Cheguei ao limite de consultas agora. Aguarde um pouco e envie a mensagem novamente. Nenhuma compra foi enviada para registro.':'🦉 Não consegui concluir esta solicitação agora. Tente novamente respondendo à mensagem atual ou consulte o Super App.');
    return false;
   }
  }),vote:vote=>queue(()=>processVote(vote))};

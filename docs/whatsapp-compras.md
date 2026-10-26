@@ -6,12 +6,14 @@ O worker da mensageria interpreta compras com Groq. A chave `GROQ_API_KEY` fica 
 
 No painel, edite o destinatário e marque **Enviar compras por texto ou áudio, com confirmação**. Depois, a pessoa autorizada envia uma mensagem individual ao número conectado. O próprio número conectado pode usar a conversa consigo mesmo, desde que também esteja autorizado. Exemplos:
 
-- “Gastei trinta e cinco reais e cinquenta centavos na padaria, no débito.”
-- “Almoço quinze reais e café cinco reais, tudo no Pix.”
+- “Gastei 10 reais na padaria.”
+- “Almoço quinze reais e café cinco reais.”
 
-O bot mostra descrição, valores, pagamento, total, data de hoje e categoria Outros. Escolha **Confirmar** ou **Cancelar** na enquete. Também é possível responder diretamente à prévia com “pode registrar”, “cancelar” ou uma correção. Um “sim” sem responder à prévia não registra nada. Áudio serve para informar/corrigir o rascunho; não confirma uma gravação.
+O bot mostra descrição, valores, total, data de hoje e o destino Despesas variáveis · Débito/Pix. Descrição e valor bastam: não pergunta pagamento ou categoria. Internamente o Super App recebe `metodo_pagamento=debito_pix`, `tipo=despesa` e os demais campos padrão; as despesas fixas permanecem separadas. As perguntas e orientações usam o mascote 🦉. Escolha **Confirmar** ou **Cancelar** na enquete. Também é possível responder diretamente à prévia com “pode registrar”, “cancelar” ou uma correção. Um “sim” sem responder à prévia não registra nada. Áudio serve para informar/corrigir o rascunho; não confirma uma gravação.
 
 Se faltar informação, responda diretamente à pergunta do bot. Uma correção produz uma nova prévia e invalida a enquete anterior. A confirmação expira em 15 minutos, sem renovar o prazo a cada correção. Crédito, parcelas, outras moedas e outras datas não são convertidos automaticamente para débito/Pix.
+
+Se ficou na antiga pergunta sobre débito ou Pix, envie `/pendente`: o bot recupera descrição e valor, aplica a modalidade única e mostra a prévia sem IA nova. Pedidos já submetidos continuam com o payload original, para preservar a idempotência.
 
 Se perdeu a prévia, envie `/pendente` na mesma conversa. O bot recupera o pedido atual sem chamar a IA nem criar outra compra. Se a gravação estiver com resultado incerto, mantém o mesmo UUID e os mesmos itens.
 
