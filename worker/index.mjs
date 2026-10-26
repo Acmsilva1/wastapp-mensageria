@@ -1,4 +1,4 @@
-import { logFailure } from '../lib/diagnostics.mjs';
+import { logFailure, sendDiagnostic } from '../lib/diagnostics.mjs';
 import { randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { createRequire } from 'node:module';
@@ -87,9 +87,12 @@ async function deliver(job) {
       new Promise((_, reject) => { sendTimer = setTimeout(() => reject(new Error('send_timeout')), 30000); })
     ]);
     // 'sent' significa aceito pela biblioteca; nao significa lido ou entregue no celular.
-    await repo.finish(worker, job.id, 'sent', null, message.id?._serialized || null);
+    if (!message?.id?._serialized) throw new Error('send_missing_message_id');
+    await repo.finish(worker, job.id, 'sent', null, message.id._serialized);
   } catch (error) {
-    await repo.finish(worker, job.id, sending ? 'uncertain' : 'failed', sending ? 'send_unconfirmed' : ['group_unavailable', 'group_read_only', 'group_lookup_timeout', 'number_not_registered'].includes(error.message) ? error.message : 'lookup_failed');
+    const code = sending ? sendDiagnostic(error) : ['group_unavailable', 'group_read_only', 'group_lookup_timeout', 'number_not_registered'].includes(error.message) ? error.message : 'lookup_failed';
+    console.error(JSON.stringify({event:'whatsapp_send_failed',code}));
+    await repo.finish(worker, job.id, sending ? 'uncertain' : 'failed', code);
     if (error.message === 'send_timeout') {
       ready = false;
       setImmediate(() => close('send_timeout').finally(() => process.exit(1)));
