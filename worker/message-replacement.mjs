@@ -75,10 +75,11 @@ export function createMessageReplacement({repo,worker,revoke}) {
       else await repo.finish(worker,job.id,'sent',null,ids.at(-1));
     },
     async trackFeedback(job,address,message) {
-      if(!job.replacement_address || !replacementScope(job,address))return;
+      if(!replacementScope(job,address))return;
+      if(job.replacement_address ? job.replacement_address!==address : job.status!=='sent' || job.water_address!==address)return;
       const id=serializedId(message?.id);
       if(!id)throw new Error('replacement_feedback_unconfirmed');
-      await repo.appendReplacementMessage(worker,job.id,id);
+      await repo.appendReplacementMessage(worker,job.id,id,address,job.audience);
     },
     async cleanup() {
       let budget=10;

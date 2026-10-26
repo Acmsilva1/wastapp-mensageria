@@ -104,6 +104,21 @@ test(`${mode}: lock compartilhado impede resposta antiga apos substituicao e aco
  await errors.vote({...vote,parentMessage:{id:{$1:'freshpoll'},to:f.address}});assert.ok((await f.row(fresh.id)).replacement_message_ids.includes('failure-feedback'));
  }finally{await f.close();}
 });
+test(`${mode}: feedback novo de legado e guardado sem mudar selecao do ultimo aviso`,async()=>{
+ const f=await fixture(mode);try{
+ const removed=[];const r=createMessageReplacement({repo:f.repo,worker:f.worker,revoke:async(_address,id)=>{removed.push(id);return {ok:true};}});
+ const legacy=await f.job();await f.repo.bindWater(f.worker,legacy.id,f.address,'legacy-text');await f.repo.finish(f.worker,legacy.id,'sent',null,'legacy-poll');
+ const h=createWaterReplies({client:{info:{wid:{user:'5511888888888'}}},repo:f.repo,worker:f.worker,replacements:r,
+  request:async()=>({duplicate:false,profile_name:'Pessoa',amount_ml:200,realizado_ml:200,meta_ml:2000,remaining_ml:1800}),send:async()=>({id:{$1:'legacy-feedback'}})});
+ await h.vote({voter:f.address,parentMessage:{id:{$1:'legacy-poll'},to:f.address},selectedOptions:[{localId:1,name:'200 ml'}]});
+ let row=await f.row(legacy.id);assert.equal(row.replacement_address || null,null);assert.deepEqual(row.replacement_message_ids,['legacy-feedback']);
+ await assert.rejects(f.repo.appendReplacementMessage(f.worker,legacy.id,'wrong-chat','5511999999999@c.us','1'),/replacement_feedback_tracking_failed/);
+ await assert.rejects(f.repo.appendReplacementMessage(f.worker,legacy.id,'wrong-profile',f.address,'2'),/replacement_feedback_tracking_failed/);
+ assert.deepEqual((await f.row(legacy.id)).replacement_message_ids,['legacy-feedback']);
+ const fresh=await f.job();await r.begin(fresh,f.address);await f.repo.bindWater(f.worker,fresh.id,f.address,'fresh-text');await r.complete(fresh,f.address,['fresh-text','fresh-poll'],2);await r.cleanup();
+ assert.deepEqual(removed,['legacy-text','legacy-poll','legacy-feedback']);row=await f.row(legacy.id);assert.deepEqual(row.delete_pending_ids,[]);assert.equal(row.status,'sent');
+ }finally{await f.close();}
+});
 }
 
 test('migration005 idempotente; rollback protege pendencias e conserva historico ao reverter sem ativos',async()=>{
