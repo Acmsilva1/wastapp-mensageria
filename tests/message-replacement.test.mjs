@@ -57,19 +57,18 @@ test(`${mode}: substitui conjunto completo, falha parcial preserva anterior, ter
  const previous=await f.row(old.id);assert.deepEqual(previous.delete_pending_ids,[]);assert.equal(previous.delete_error,'delete_not_revocable');assert.equal((await f.row(fresh.id)).status,'sent');assert.equal((await f.row(partial.id)).status,'uncertain');
  }finally{await f.close();}
 });
-test(`${mode}: isola tipos, pessoas, perfis e grupos; legado somente ultimo sent seguro`,async()=>{
+test(`${mode}: isola tipos, pessoas e grupos; legado somente ultimo sent seguro`,async()=>{
  const f=await fixture(mode);try{
  const deleted=[];const r=createMessageReplacement({repo:f.repo,worker:f.worker,revoke:async(_a,id)=>{deleted.push(id);return {ok:true};}});
  const legacy=await f.job({event_type:'health.diet_menu'});await f.repo.finish(f.worker,legacy.id,'sent',null,'legacy-known');
  const uncertain=await f.job({event_type:'health.diet_menu'});await f.repo.finish(f.worker,uncertain.id,'uncertain','send_unconfirmed','uncertain-never');
- const variants=[{event_type:'health.water_progress'},{event_type:'financeiro.daily_summary'},{event_type:'health.diet_menu',audience:'2'},{event_type:'health.diet_menu',number:'+5511999999999'}];
- // Enqueue each variant in isolation: financeiro deliberately fans out across enabled recipients.
- for(const v of variants){const j=await f.job(v);await r.begin(j,j.phone.slice(1)+'@c.us');await r.complete(j,j.phone.slice(1)+'@c.us',['isolated-'+j.id]);while(await f.repo.claim(f.worker)){/* only extra financial copies, never sent or tracked */}}
+ // Outros tipos/números nao substituem a dieta deste contato. Flags fan-out: drenar cópias extras.
+ const variants=[{event_type:'health.water_progress'},{event_type:'financeiro.daily_summary'},{event_type:'health.diet_menu',number:'+5511999999999'}];
+ for(const v of variants){const j=await f.job(v);const address=(j.phone||j.group_id).replace(/^\+/,'')+(j.phone?'@c.us':'');await r.begin(j,address);await r.complete(j,address,['isolated-'+j.id]);while(await f.repo.claim(f.worker)){/* fan-out extras */}}
  const latest=await f.job({event_type:'health.diet_menu'});await r.begin(latest,f.address);await r.complete(latest,f.address,['latest']);await r.cleanup();
  assert.deepEqual(deleted,['legacy-known']);assert.equal((await f.row(uncertain.id)).superseded_at || null,null);
  assert.equal((await f.row(legacy.id)).status,'sent');
  const group='120363123456789@g.us';const gj=await f.job({number:group,group:true,event_type:'health.water_progress'});
- // A phone copy may precede the group; finish copies until the group is claimed.
  let actual=gj;while(actual && actual.target_type!=='group'){await f.repo.finish(f.worker,actual.id,'sent',null,'group-copy');actual=await f.repo.claim(f.worker);}
  assert.ok(actual);await r.begin(actual,group);await r.complete(actual,group,['group-id']);assert.equal((await f.row(actual.id)).replacement_address || null,null);
  const secondGroup=await f.job({number:group,group:true,event_type:'health.water_progress'});await r.begin(secondGroup,group);await r.complete(secondGroup,group,['group-id-2']);await r.cleanup();

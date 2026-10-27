@@ -32,7 +32,7 @@ Se perdeu a prévia, envie `/pendente` na mesma conversa. O bot recupera o pedid
 
 ## Configuração
 
-Worker: `GROQ_API_KEY`, `WHATSAPP_PURCHASE_ENABLED=true`, `WHATSAPP_PURCHASE_CALLBACK_TOKEN` e `SUPERAPP_API_ORIGIN`. O número remetente dos alertas e da conversa consigo mesmo é o da sessão WhatsApp conectada na VPS (destinatário “conta conectada” no painel). `WHATSAPP_PURCHASE_OWNER_PHONE` é opcional/legado e não escolhe o remetente. A chave Groq deve entrar somente no `env_file` do worker, com arquivo privado e fora do Git. Nunca no frontend, na imagem Docker ou no painel.
+Worker: `GROQ_API_KEY`, `WHATSAPP_PURCHASE_ENABLED=true`, `WHATSAPP_PURCHASE_CALLBACK_TOKEN` e `SUPERAPP_API_ORIGIN`. A sessão WhatsApp na VPS é só o mensageiro. Alertas vão aos números individuais salvos no painel conforme as flags. `WHATSAPP_PURCHASE_OWNER_PHONE` é opcional/legado. A chave Groq deve entrar somente no `env_file` do worker, com arquivo privado e fora do Git. Nunca no frontend, na imagem Docker ou no painel.
 
 Backend do Super App: mesmo telefone e token dedicado, além do proprietário administrativo já configurado. `POST /api/financeiro?resource=whatsapp-purchases` exige Bearer, `confirmed:true`, UUID, telefone real do remetente, `authorization_id`, `authorization_version`, data e itens com centavos inteiros. O backend resolve o proprietário por configuração, nunca pelo texto do modelo. Reutiliza a confirmação atômica de compras existente; a chave Groq não é necessária na Vercel.
 

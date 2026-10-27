@@ -48,34 +48,36 @@ test('AES autentica o backup e cookies expiram sem aceitar adulteracao', () => {
   assert.equal(validSession(cookie, 'wrong', 1001), false);
   assert.equal(validSession(cookie, 'secret', 1000 + 8 * 3600000), false);
 });
-test('resumo financeiro ignora o perfil; agua e dieta continuam no perfil do evento', async () => {
+test('alertas vão aos numeros salvos com a flag; conta conectada e desativados nao recebem', async () => {
   await reset();
-  const admin = await repo.saveRecipient(recipient({ phone: '+5511900000001', audience: '1', events: ['financeiro.daily_summary', 'health.water_progress', 'health.diet_menu'] }));
-  const other = await repo.saveRecipient(recipient({ phone: '+5521900000002', audience: '2', events: ['financeiro.daily_summary', 'health.water_progress', 'health.diet_menu'] }));
-  const off = await repo.saveRecipient(recipient({ phone: '+5531900000003', audience: '2', events: ['health.water_progress', 'health.diet_menu'] }));
+  const one = await repo.saveRecipient(recipient({ phone: '+5511900000001', audience: '1', events: ['financeiro.daily_summary', 'health.water_progress', 'health.diet_menu'] }));
+  const two = await repo.saveRecipient(recipient({ phone: '+5521900000002', audience: '2', events: ['financeiro.daily_summary', 'health.water_progress', 'health.diet_menu'] }));
+  const dietOnly = await repo.saveRecipient(recipient({ phone: '+5531900000003', audience: '2', events: ['health.diet_menu'] }));
   const money = await repo.enqueue(alert({ audience: '1', event_type: 'financeiro.daily_summary', idempotency_key: 'fin:1', title: 'Resumo', message: 'Caixa do dia.' }));
   assert.equal(money.jobs.length, 2);
   const moneyIds = (await db.query("select recipient_id from mensageria.deliveries where event_type='financeiro.daily_summary'")).rows.map(row => row.recipient_id).sort();
-  assert.deepEqual(moneyIds, [admin.id, other.id].sort());
-  assert.equal(moneyIds.includes(off.id), false);
-  const water = await repo.enqueue(alert({ audience: '1', event_type: 'health.water_progress', idempotency_key: 'agua:1' }));
-  assert.equal(water.jobs.length, 1);
-  assert.equal((await db.query("select recipient_id from mensageria.deliveries where event_type='health.water_progress'")).rows[0].recipient_id, admin.id);
-  const diet = await repo.enqueue(alert({ audience: '1', event_type: 'health.diet_menu', idempotency_key: 'dieta:1', title: 'Almoco', message: 'Menu do dia.' }));
-  assert.equal(diet.jobs.length, 1);
-  assert.equal((await db.query("select recipient_id from mensageria.deliveries where event_type='health.diet_menu'")).rows[0].recipient_id, admin.id);
+  assert.deepEqual(moneyIds, [one.id, two.id].sort());
+  assert.equal(moneyIds.includes(dietOnly.id), false);
+  const water = await repo.enqueue(alert({ audience: '9', event_type: 'health.water_progress', idempotency_key: 'agua:1' }));
+  assert.equal(water.jobs.length, 2);
+  const waterIds = (await db.query("select recipient_id from mensageria.deliveries where event_type='health.water_progress'")).rows.map(row => row.recipient_id).sort();
+  assert.deepEqual(waterIds, [one.id, two.id].sort());
+  const diet = await repo.enqueue(alert({ audience: '9', event_type: 'health.diet_menu', idempotency_key: 'dieta:1', title: 'Almoco', message: 'Menu do dia.' }));
+  assert.equal(diet.jobs.length, 3);
+  const dietIds = (await db.query("select recipient_id from mensageria.deliveries where event_type='health.diet_menu'")).rows.map(row => row.recipient_id).sort();
+  assert.deepEqual(dietIds, [one.id, two.id, dietOnly.id].sort());
 });
-test('fila separa perfis, tipos e destinatarios desativados', async () => {
+test('fila separa tipos e destinatarios desativados; perfil do evento nao limita o contato salvo', async () => {
   await reset();
   const accepted = await repo.saveRecipient(recipient());
-  await repo.saveRecipient(recipient({ phone: '+5521900000000', audience: 'perfil-b' }));
+  const otherProfile = await repo.saveRecipient(recipient({ phone: '+5521900000000', audience: 'perfil-b' }));
   await repo.saveRecipient(recipient({ phone: '+5531900000000', events: ['health.diet_menu'] }));
   await repo.saveRecipient(recipient({ phone: '+5541900000000', enabled: false }));
   const result = await repo.enqueue(alert());
-  assert.equal(result.jobs.length, 1);
-  const row = (await db.query('select recipient_id from mensageria.deliveries')).rows[0];
-  assert.equal(row.recipient_id, accepted.id);
-  await assert.rejects(repo.enqueue(alert({ audience: 'sem-perfil', idempotency_key: 'outro' })), /no_authorized_recipients/);
+  assert.equal(result.jobs.length, 2);
+  const ids = (await db.query('select recipient_id from mensageria.deliveries')).rows.map(row => row.recipient_id).sort();
+  assert.deepEqual(ids, [accepted.id, otherProfile.id].sort());
+  await assert.rejects(repo.enqueue(alert({ event_type: 'financeiro.daily_summary', idempotency_key: 'outro', title: 'Resumo', message: 'x' })), /no_authorized_recipients/);
 });
 test('repeticao da chave nao duplica envio; mudanca de conteudo retorna conflito', async () => {
   await reset(); await repo.saveRecipient(recipient());
