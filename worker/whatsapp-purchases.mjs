@@ -14,9 +14,12 @@ const money=cents=>(cents/100).toLocaleString('pt-BR',{style:'currency',currency
 export function purchaseConfig(env=process.env) {
  try {
   if(env.WHATSAPP_PURCHASE_ENABLED!=='true')return null;
-  const origin=new URL(env.SUPERAPP_API_ORIGIN),phone=String(env.WHATSAPP_PURCHASE_OWNER_PHONE || '').trim(),token=String(env.WHATSAPP_PURCHASE_CALLBACK_TOKEN || '').trim();
-  if(origin.protocol!=='https:' || origin.username || origin.password || !/^\+[1-9]\d{7,14}$/.test(phone) || token.length<32 || /[\r\n]/.test(token) || !env.GROQ_API_KEY)return null;
-  return {phone,token,url:new URL('/api/financeiro?resource=whatsapp-purchases',origin.origin).href};
+  const origin=new URL(env.SUPERAPP_API_ORIGIN),token=String(env.WHATSAPP_PURCHASE_CALLBACK_TOKEN || '').trim();
+  const phone=String(env.WHATSAPP_PURCHASE_OWNER_PHONE || '').trim();
+  // Telefone opcional: a sessão WhatsApp / remetente real define o número. Env legado ainda é aceito se válido.
+  if(origin.protocol!=='https:' || origin.username || origin.password || token.length<32 || /[\r\n]/.test(token) || !env.GROQ_API_KEY)return null;
+  if(phone && !/^\+[1-9]\d{7,14}$/.test(phone))return null;
+  return {phone:phone || null,token,url:new URL('/api/financeiro?resource=whatsapp-purchases',origin.origin).href};
  }catch{return null;}
 }
 export function prunePurchaseState(state,now=Date.now()) {
@@ -54,6 +57,7 @@ export async function recordWhatsAppPurchase(draft,{env=process.env,fetcher=fetc
 function createPurchaseSession({client,repo,worker,env=process.env,scope,authorize,Poll,extract=extractPurchases,transcribe=transcribePurchaseAudio,record=recordWhatsAppPurchase,now=()=>Date.now(),send=(address,content)=>client.sendMessage(address,content,{linkPreview:false,waitUntilMsgSent:true})}) {
  let tail=Promise.resolve(),queued=0;
  const config=purchaseConfig(env);
+ if(!config?.phone)throw new Error('purchase_disabled');
  const change=fn=>repo.changePurchaseState(worker,state=>{prunePurchaseState(state,now());return fn(state);});
  const load=()=>change(state=>structuredClone(state));
  async function identities() {
@@ -274,7 +278,8 @@ export function createWhatsAppPurchases(options) {
    changePurchaseState:(lease,fn)=>repo.changePurchaseState(lease,root=>{
     root.sessions ||= {};
     // Adopt the previous owner-only draft once, without changing its request ID.
-    if(!root.sessions[scope.id] && phone===config.phone && root.draft?.owner_phone===phone) {
+    const sessionPhone=client.info?.wid?.user?`+${client.info.wid.user}`:config.phone;
+    if(!root.sessions[scope.id] && sessionPhone && phone===sessionPhone && root.draft?.owner_phone===phone) {
      root.sessions[scope.id]={processed:root.processed || [],outbound:root.outbound || [],calls:root.calls || [],draft:{...root.draft,authorization_id:scope.id,authorization_version:scope.version}};
      delete root.draft;delete root.processed;delete root.outbound;delete root.calls;
     }

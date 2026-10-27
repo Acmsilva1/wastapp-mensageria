@@ -36,7 +36,12 @@ async function savedGroupId(repo, groupId) {
 }
 export async function recipientAddress(client, repo, recipient) {
   if (recipient.target_type !== 'group') {
-    const number = await client.getNumberId(recipient.phone.slice(1));
+    // Conta conectada: o número da sessão na VPS manda; não usa telefone pessoal pinado.
+    const digits = recipient.follow_session
+      ? (client.info?.wid?.user || null)
+      : String(recipient.phone || '').replace(/^\+/, '');
+    if (!/^\d{8,15}$/.test(digits || '')) throw new Error('number_not_registered');
+    const number = await client.getNumberId(digits);
     if (!number) throw new Error('number_not_registered');
     const id=serializedId(number);
     if(!id) throw new Error('number_not_registered');

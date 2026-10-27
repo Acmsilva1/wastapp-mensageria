@@ -70,7 +70,7 @@ function renderRecipients(rows) {
     const card = element('article', undefined, 'recipient');
     const head = element('div', undefined, 'recipient-head');
     head.append(element('strong', r.name), element('span', r.enabled ? 'Ativo' : 'Inativo', `pill ${r.enabled ? 'ok' : 'off'}`));
-    card.append(head, element('div', r.target_type === 'group' ? 'Grupo do WhatsApp' : r.phone, 'recipient-phone'), element('div', `Perfil: ${r.audience}`, 'recipient-profile'));
+    card.append(head, element('div', r.target_type === 'group' ? 'Grupo do WhatsApp' : r.follow_session ? `Conta conectada${r.phone ? ` (${r.phone})` : ''}` : r.phone, 'recipient-phone'), element('div', `Perfil: ${r.audience}`, 'recipient-profile'));
     const tags = element('div', undefined, 'tags'); for (const type of r.events) tags.append(element('span', events[type] || type, 'tag')); if (r.permissions?.includes('purchases.record')) tags.append(element('span', 'Pode enviar compras', 'tag')); card.append(tags);
     const actions = element('div', undefined, 'recipient-actions');
     const edit = element('button', 'Editar', 'quiet'); edit.type = 'button'; edit.onclick = () => editRecipient(r);
@@ -90,12 +90,14 @@ function updateGroupOptions() {
 }
 function updateTargetFields() {
   const form = $('#recipient-form');
-  const group = form.elements.target_type.value === 'group';
+  const type = form.elements.target_type.value;
+  const group = type === 'group';
+  const connected = type === 'connected';
   $('#interaction-fields').hidden = group;
   form.querySelector('[name=events][value="agent.notice"]').disabled=group;
   for (const input of form.querySelectorAll('[name=permissions]')) input.disabled = group;
-  $('#phone-field').hidden = group; $('#group-field').hidden = !group;
-  form.elements.phone.disabled = group; form.elements.phone.required = !group;
+  $('#phone-field').hidden = group || connected; $('#group-field').hidden = !group; $('#connected-help').hidden = !connected;
+  form.elements.phone.disabled = group || connected; form.elements.phone.required = !group && !connected;
   form.elements.group_id.disabled = !group || Boolean(editingRecipient); form.elements.group_id.required = group && !editingRecipient;
   form.elements.target_type.disabled = Boolean(editingRecipient);
   $('#refresh-groups').disabled = groupsLoading || savingRecipient;
@@ -143,7 +145,7 @@ function editRecipient(r) {
   if (savingRecipient) return;
   editingRecipient = r; formGeneration++;
   form.elements.name.value = r.name; form.elements.phone.value = r.phone || ''; form.elements.audience.value = r.audience;
-  form.elements.target_type.value = r.target_type === 'group' ? 'group' : 'phone';
+  form.elements.target_type.value = r.target_type === 'group' ? 'group' : r.follow_session ? 'connected' : 'phone';
   form.elements.phone.readOnly = true; form.elements.audience.readOnly = true;
   updateGroupOptions(); updateTargetFields();
   form.elements.enabled.checked = r.enabled;
@@ -193,10 +195,11 @@ $('#refresh-groups').onclick = loadGroups;
 $('#recipient-form').elements.target_type.onchange = () => { updateTargetFields(); if ($('#recipient-form').elements.target_type.value === 'group' && !groupsLoaded) loadGroups(); };
 $('#recipient-form').elements.group_id.onchange = () => { const form = $('#recipient-form'); const group = groupCatalog.find(item => item.id === form.elements.group_id.value); if (group && !form.elements.name.value.trim()) form.elements.name.value = group.name; };
 $('#recipient-form').onsubmit = async event => { event.preventDefault(); if (savingRecipient) return; const form = event.currentTarget; const button = form.querySelector('button[type=submit], button.primary'); const data = new FormData(form);
-  const targetType = editingRecipient?.target_type === 'group' ? 'group' : editingRecipient ? 'phone' : form.elements.target_type.value;
-  const payload = { name: data.get('name'), target_type: targetType, audience: editingRecipient?.audience || data.get('audience'), events: data.getAll('events'), permissions: targetType === 'phone' ? data.getAll('permissions') : [], enabled: form.elements.enabled.checked };
+  const selectedType = editingRecipient?.target_type === 'group' ? 'group' : editingRecipient?.follow_session ? 'connected' : editingRecipient ? 'phone' : form.elements.target_type.value;
+  const targetType = selectedType === 'connected' ? 'phone' : selectedType;
+  const payload = { name: data.get('name'), target_type: targetType, follow_session: selectedType === 'connected', audience: editingRecipient?.audience || data.get('audience'), events: data.getAll('events'), permissions: targetType === 'phone' ? data.getAll('permissions') : [], enabled: form.elements.enabled.checked };
   if (targetType === 'group') payload.group_id = editingRecipient?.group_id || form.elements.group_id.value;
-  else payload.phone = editingRecipient?.phone || data.get('phone');
+  else if (selectedType !== 'connected') payload.phone = editingRecipient?.phone || data.get('phone');
   savingRecipient = true; button.disabled = true; $('#cancel-edit').disabled = true; updateTargetFields();
   try { await api('recipients', payload); resetForm(); toast('Destinatário salvo.'); await refresh(); } catch (error) { toast(error.message, true); } finally { savingRecipient = false; button.disabled = false; $('#cancel-edit').disabled = false; updateTargetFields(); }
 };

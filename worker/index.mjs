@@ -186,7 +186,9 @@ async function run() {
     lastQRAt = 0;
     qrGeneration++;
     const phone = client.info?.wid?.user;
-    await repo.state(worker, 'connected', client.info?.pushname || 'WhatsApp', phone ? `+${phone}` : null);
+    const accountPhone = phone ? `+${phone}` : null;
+    await repo.state(worker, 'connected', client.info?.pushname || 'WhatsApp', accountPhone);
+    if (accountPhone && typeof repo.syncFollowSessionPhones === 'function') await repo.syncFollowSessionPhones(accountPhone);
     await repo.markSessionSaved(worker);
     await repo.log(worker, 'connected');
     try{await agentChannel.ready();}catch{console.error('agent_channel_owner_unavailable');}
