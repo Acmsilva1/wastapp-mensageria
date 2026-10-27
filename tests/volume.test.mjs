@@ -200,7 +200,7 @@ test('envio interrompido ou vencido nao libera a mesma chave', async () => {
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test('resumo financeiro ignora o perfil; agua e dieta continuam no perfil do evento', async () => {
+test('envio segue as flags dos destinatarios; audience so identifica o evento', async () => {
   const root = await tempVolume();
   try {
     const repo = await VolumeRepository.open(root);
@@ -222,9 +222,9 @@ test('resumo financeiro ignora o perfil; agua e dieta continuam no perfil do eve
     assert.equal(financeIds.includes(phoneOff.id), false);
     assert.equal(financeIds.includes(disabled.id), false);
     const water = await repo.enqueue(alert({ audience: '1', event_type: 'health.water_progress', idempotency_key: 'agua:1' }));
-    assert.equal(water.jobs.length, 1);
+    assert.equal(water.jobs.length, 4);
     const diet = await repo.enqueue(alert({ audience: '1', event_type: 'health.diet_menu', idempotency_key: 'dieta:1', title: 'Almoco', message: 'Menu do dia' }));
-    assert.equal(diet.jobs.length, 1);
+    assert.equal(diet.jobs.length, 3);
     const claimed = [];
     for (;;) {
       const job = await repo.claim(worker);
@@ -234,8 +234,8 @@ test('resumo financeiro ignora o perfil; agua e dieta continuam no perfil do eve
     }
     const of = event => claimed.filter(item => item.endsWith(`:${event}`)).map(item => item.slice(0, item.lastIndexOf(':'))).sort();
     assert.deepEqual(of('financeiro.daily_summary'), [phone1.id, phone2.id, group2.id].sort());
-    assert.deepEqual(of('health.water_progress'), [phone1.id]);
-    assert.deepEqual(of('health.diet_menu'), [phone1.id]);
+    assert.deepEqual(of('health.water_progress'), [phone1.id, phone2.id, phoneOff.id, group2.id].sort());
+    assert.deepEqual(of('health.diet_menu'), [phone1.id, phone2.id, phoneOff.id].sort());
     const after = JSON.parse(await readFile(path.join(root, 'mensageria.json'), 'utf8'));
     assert.equal(after.deliveries.some(item => item.status === 'cancelled'), false);
     assert.equal(after.ingress.length, 3);
@@ -266,6 +266,49 @@ test('lock do volume so sai com o token deste processo', async () => {
     await repo.read();
     await assert.rejects(readFile(lock), { code: 'ENOENT' });
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('teste manual enfileira um unico envio para o destinatario escolhido', async () => {
+  const root = await tempVolume();
+  const repo = await VolumeRepository.open(root);
+  const env = { ADMIN_TOKEN: 'a'.repeat(64), INTEGRATION_TOKEN: 'b'.repeat(64), SESSION_ENCRYPTION_KEY: 'c'.repeat(64), APP_ORIGIN: 'http://127.0.0.1:9' };
+  const server = http.createServer(createHandler({ repository: repo, env }));
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${server.address().port}/api/control?action=`;
+  const headers = { 'Content-Type': 'application/json', 'X-Panel-Request': '1', Origin: env.APP_ORIGIN };
+  try {
+    const andre = await repo.saveRecipient(recipient({ name: 'Andre', phone: '+55 27 98851-6301', audience: 'andre', events: ['health.diet_menu', 'financeiro.daily_summary'] }));
+    const juliana = await repo.saveRecipient(recipient({ name: 'Juliana', phone: '+55 27 99501-5990', audience: 'juliana', events: ['health.diet_menu'] }));
+    const login = await fetch(base + 'login', { method: 'POST', headers, body: JSON.stringify({ token: env.ADMIN_TOKEN }) });
+    const cookie = login.headers.get('set-cookie').split(';')[0];
+    const auth = { ...headers, Cookie: cookie };
+    const queued = await fetch(base + 'recipient-test', { method: 'POST', headers: auth, body: JSON.stringify({ id: andre.id }) });
+    assert.equal(queued.status, 202);
+    const body = await queued.json();
+    assert.equal(body.ok, true);
+    assert.equal(body.job.recipient_id, andre.id);
+    assert.equal(body.job.event_type, 'health.diet_menu');
+    const data = await repo.read();
+    assert.equal(data.deliveries.length, 1);
+    assert.equal(data.deliveries[0].recipient_id, andre.id);
+    assert.equal(data.deliveries[0].recipient_id === juliana.id, false);
+    assert.match(data.deliveries[0].idempotency_key, /^panel-test:/);
+    const limited = await fetch(base + 'recipient-test', { method: 'POST', headers: auth, body: JSON.stringify({ id: andre.id }) });
+    assert.equal(limited.status, 429);
+    await repo.mutate(d => {
+      d.recipients.push({
+        id: randomUUID(), name: 'Sessao', phone: '+5527999058023', target_type: 'phone', group_id: null,
+        audience: 'sessao-wa', events: ['agent.notice'], permissions: [], follow_session: true, enabled: true,
+        created_at: new Date().toISOString(), updated_at: new Date().toISOString()
+      });
+    });
+    const sessionId = (await repo.read()).recipients.find(r => r.follow_session).id;
+    const blocked = await fetch(base + 'recipient-test', { method: 'POST', headers: auth, body: JSON.stringify({ id: sessionId }) });
+    assert.equal(blocked.status, 409);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test('painel local le o volume sem DATABASE_URL e o QR nao fica depois de conectar', async () => {

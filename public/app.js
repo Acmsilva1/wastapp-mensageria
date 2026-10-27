@@ -32,7 +32,13 @@ const messages = {
   group_connection_required: 'Conecte o WhatsApp antes de carregar os grupos.',
   group_invalid: 'Selecione um grupo válido da lista da conta conectada.',
   group_id_invalid: 'Selecione um grupo válido da lista da conta conectada.',
-  phone_requires_country_code: 'Informe o número com +, DDI e DDD. Exemplo: +55 11 99999-9999.', origin_rejected: 'O endereço do painel difere do APP_ORIGIN configurado.'
+  phone_requires_country_code: 'Informe o número com +, DDI e DDD. Exemplo: +55 11 99999-9999.', origin_rejected: 'O endereço do painel difere do APP_ORIGIN configurado.',
+  recipient_not_found: 'Destinatário não encontrado.',
+  recipient_disabled: 'Ative o destinatário antes de testar.',
+  connected_recipient_no_test: 'A conta conectada é só o mensageiro; teste um número ou grupo salvo.',
+  recipient_no_test_events: 'Este destinatário não tem alerta de texto para teste (água/dieta/financeiro).',
+  recipient_test_rate_limited: 'Aguarde 30 segundos antes de testar de novo este destinatário.',
+  demo_no_delivery: 'A demonstração local não envia mensagens reais.'
 };
 const stateLabels = { restarting: 'Preparando novo QR', offline: 'Serviço offline', connecting: 'Conectando', qr: 'Escaneie o QR', authenticated: 'Finalizando conexão', connected: 'Conectado' };
 const deliveryLabels = { pending: 'Na fila', sending: 'Enviando', sent: 'Enviado', failed: 'Falhou', uncertain: 'Sem confirmação', cancelled: 'Cancelado' };
@@ -74,9 +80,22 @@ function renderRecipients(rows) {
     const tags = element('div', undefined, 'tags'); for (const type of r.events) tags.append(element('span', events[type] || type, 'tag')); if (r.permissions?.includes('purchases.record')) tags.append(element('span', 'Pode enviar compras', 'tag')); card.append(tags);
     const actions = element('div', undefined, 'recipient-actions');
     const edit = element('button', 'Editar', 'quiet'); edit.type = 'button'; edit.onclick = () => editRecipient(r);
+    const test = element('button', 'Testar', 'quiet'); test.type = 'button';
+    test.disabled = !r.enabled || Boolean(r.follow_session);
+    test.title = r.follow_session ? 'Conta conectada não recebe teste' : r.enabled ? 'Envia uma mensagem de teste só para este destinatário' : 'Ative o destinatário para testar';
+    test.onclick = async () => {
+      if (test.disabled) return;
+      test.disabled = true;
+      try {
+        const data = await api('recipient-test', { id: r.id });
+        toast(`Teste enfileirado para ${data.job?.name || r.name}. Confira o celular e a aba Logs.`);
+        await refresh();
+      } catch (error) { toast(error.message, true); }
+      finally { test.disabled = !r.enabled || Boolean(r.follow_session); }
+    };
     const toggle = element('button', r.enabled ? 'Desativar' : 'Ativar', 'quiet'); toggle.type = 'button';
     toggle.onclick = async () => { toggle.disabled = true; try { await api('recipient-toggle', { id: r.id, enabled: !r.enabled }); toast(r.enabled ? 'Destinatário desativado.' : 'Destinatário ativado.'); await refresh(); } catch (error) { toast(error.message, true); } finally { toggle.disabled = false; } };
-    actions.append(edit, toggle); card.append(actions); container.append(card);
+    actions.append(edit, test, toggle); card.append(actions); container.append(card);
   }
 }
 function updateGroupOptions() {
