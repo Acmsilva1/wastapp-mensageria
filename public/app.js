@@ -56,6 +56,9 @@ let polling = false;
 let loggedIn = false;
 let lastSnapshot = '';
 let toastTimer;
+const ERRORS_PAGE_SIZE = 10;
+let deliveryErrors = [];
+let deliveryErrorsPage = 1;
 function toast(message, error = false) { $('#toast').textContent = message; $('#toast').className = error ? 'error' : ''; $('#toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('#toast').hidden = true; }, 6500); }
 async function api(action, body) {
   const response = await fetch(`/api/control?action=${action}`, { method: body === undefined ? 'GET' : 'POST', credentials: 'same-origin', cache: 'no-store', headers: { 'Content-Type': 'application/json', 'X-Panel-Request': '1' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
@@ -189,7 +192,11 @@ function render(data) {
   const recipientSignature = JSON.stringify(data.recipients);
   if (lastSnapshot !== recipientSignature) { renderRecipients(data.recipients); lastSnapshot = recipientSignature; }
   renderDeliveryRows($('#delivery-list'), data.deliveries || [], 'Nenhum envio na fila.');
-  renderDeliveryRows($('#delivery-errors'), data.delivery_errors || [], 'Nenhuma falha de envio registrada.');
+  deliveryErrors = data.delivery_errors || [];
+  const errorPages = Math.max(1, Math.ceil(deliveryErrors.length / ERRORS_PAGE_SIZE) || 1);
+  if (deliveryErrorsPage > errorPages) deliveryErrorsPage = errorPages;
+  if (deliveryErrorsPage < 1) deliveryErrorsPage = 1;
+  renderDeliveryErrorsPage();
   const logs = $('#connection-logs'); logs.replaceChildren();
   for (const row of data.logs) { const item = element('div', undefined, 'log'); const description = element('div', logLabels[row.event] || 'Evento de conexão'); if (row.code) description.append(element('small', row.code)); item.append(description, element('span', time(row.created_at), 'muted')); logs.append(item); }
   if (!data.logs.length) logs.append(element('p', 'Nenhum evento de conexão registrado.', 'empty'));
@@ -208,6 +215,32 @@ function renderDeliveryRows(tbody, rows, emptyText) {
     tbody.append(tr);
   }
   if (!rows.length) { const tr = element('tr'); const td = element('td', emptyText); td.colSpan = 4; tr.append(td); tbody.append(tr); }
+}
+function renderDeliveryErrorsPage() {
+  const start = (deliveryErrorsPage - 1) * ERRORS_PAGE_SIZE;
+  renderDeliveryRows($('#delivery-errors'), deliveryErrors.slice(start, start + ERRORS_PAGE_SIZE), 'Nenhuma falha de envio registrada.');
+  const pager = $('#delivery-errors-pager');
+  const total = deliveryErrors.length;
+  const pages = Math.max(1, Math.ceil(total / ERRORS_PAGE_SIZE) || 1);
+  if (total <= ERRORS_PAGE_SIZE) {
+    pager.hidden = true;
+    pager.replaceChildren();
+    return;
+  }
+  pager.hidden = false;
+  pager.replaceChildren();
+  const info = element('span', `Página ${deliveryErrorsPage} de ${pages} · ${total} erros`, 'muted');
+  const actions = element('div', undefined, 'pager-actions');
+  const prev = element('button', 'Anterior', 'quiet');
+  prev.type = 'button';
+  prev.disabled = deliveryErrorsPage <= 1;
+  prev.onclick = () => { if (deliveryErrorsPage > 1) { deliveryErrorsPage -= 1; renderDeliveryErrorsPage(); } };
+  const next = element('button', 'Próxima', 'quiet');
+  next.type = 'button';
+  next.disabled = deliveryErrorsPage >= pages;
+  next.onclick = () => { if (deliveryErrorsPage < pages) { deliveryErrorsPage += 1; renderDeliveryErrorsPage(); } };
+  actions.append(prev, next);
+  pager.append(info, actions);
 }
 async function refresh() { if (!loggedIn || polling) return; polling = true; try { render(await api('snapshot')); } catch (error) { toast(error.message, true); } finally { polling = false; } }
 $('#login-form').onsubmit = async event => { event.preventDefault(); const form = event.currentTarget; const button = form.querySelector('button'); button.disabled = true; try { await api('login', { token: form.elements.token.value }); form.reset(); showDashboard(false); await refresh(); } catch (error) { toast(error.message, true); } finally { button.disabled = false; } };
