@@ -151,7 +151,10 @@ async function run() {
   const purchases=createWhatsAppPurchases({client,repo,worker,Poll});
   agentChannel=createAgentChannel({client,repo,dataPath});
   const inbound=action => (...args) => { if (!ready || stopping) return; action(...args).catch(()=>console.error('inbound_processing_failed')); };
-  client.on('vote_update',inbound(async vote=>{await waterReplies.vote(vote);await purchases.vote(vote);}));
+  client.on('vote_update',inbound(async vote=>{
+    console.error(JSON.stringify({event:'vote_update_received',options:vote?.selectedOptions?.length || 0}));
+    await waterReplies.vote(vote);await purchases.vote(vote);
+  }));
   // message_create includes own-account replies; authorization still requires its recipient registration.
   client.on('message_create',inbound(async message=>{if(await agentChannel.message(message))return;await waterReplies.message(message);await purchases.message(message);}));
   async function noteGroupFailure(error) {
@@ -211,6 +214,7 @@ async function run() {
   await client.initialize();
   let cleanedAt = 0;
   let deletionsAt = 0;
+  let waterReconcileAt = 0;
   while (!stopping) {
     if (Date.now() - cleanedAt > 3600000) { await repo.cleanup(); try{await agentChannel.cleanup();}catch{console.error('agent_channel_cleanup_failed');} cleanedAt = Date.now(); }
     if (ready) {
@@ -218,6 +222,11 @@ async function run() {
       if(Date.now()-deletionsAt>30000) {
         deletionsAt=Date.now();
         try {await replacements.cleanup();} catch {console.error('replacement_cleanup_failed');}
+      }
+      // Business/@lid: vote_update às vezes não chega; reconcilia votos já gravados no WhatsApp.
+      if(Date.now()-waterReconcileAt>20000) {
+        waterReconcileAt=Date.now();
+        try {await waterReplies.reconcile();} catch {console.error('water_vote_reconcile_failed');}
       }
       const job = await repo.claim(worker);
       if (job) {

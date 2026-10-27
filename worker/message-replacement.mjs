@@ -50,8 +50,25 @@ export async function revokeBotMessage(client,address,messageId) {
     const message=await metadataLookup(()=>client.getMessageById(messageId),10000);
     if(!message)return {ok:false,code:'delete_message_unavailable',terminal:true};
     if(message.fromMe!==true || serializedId(message.id)!==messageId)return {ok:false,code:'delete_not_bot_message',terminal:true};
-    if(serializedId(message.to)!==address && serializedId(message.id?.remote)!==address)return {ok:false,code:'delete_wrong_conversation',terminal:true};
-    return await metadataLookup(()=>client.pupPage.evaluate(revokeOwnMessageInPage,messageId,address),10000);
+    const remote=serializedId(message.id?.remote) || serializedId(message.to);
+    const to=serializedId(message.to);
+    // Mensagens 1:1 no Business frequentemente ficam com remote @lid enquanto o envio foi em @c.us.
+    let same=remote===address || to===address;
+    if(!same && typeof client.getContactLidAndPhone==='function' && /^\d+@(c\.us|lid)$/.test(address || '')) {
+      try {
+        const mappings=await metadataLookup(()=>client.getContactLidAndPhone([address]),10000);
+        const aliases=new Set([address]);
+        for(const row of mappings || []) {
+          const pn=serializedId(row?.pn) || row?.pn;
+          const lid=serializedId(row?.lid) || row?.lid;
+          if(pn)aliases.add(pn); if(lid)aliases.add(lid);
+        }
+        same=aliases.has(remote) || aliases.has(to);
+      } catch {}
+    }
+    if(!same)return {ok:false,code:'delete_wrong_conversation',terminal:true};
+    const deleteAddress=remote && /^\d+@(c\.us|lid)$/.test(remote) ? remote : address;
+    return await metadataLookup(()=>client.pupPage.evaluate(revokeOwnMessageInPage,messageId,deleteAddress),10000);
   } catch(error) {
     return {ok:false,code:error?.message==='group_lookup_timeout'?'delete_timeout':'delete_failed',terminal:false};
   }
