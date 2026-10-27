@@ -101,7 +101,7 @@ test('volume guarda sessao operacional sem banco e sem o texto da mensagem concl
     await assert.rejects(repo.enqueue(alert({ message: 'outro' })), /idempotency_conflict/);
     const stored = JSON.parse(await readFile(path.join(root, 'mensageria.json'), 'utf8'));
     assert.equal(stored.deliveries.length, 1);
-    assert.equal(stored.logs, undefined);
+    assert.deepEqual(stored.logs, []);
     assert.match(JSON.stringify(stored), /MENSAGEM-PENDENTE-UNICA/);
     const session = path.join(root, 'session-mensageria');
     await mkdir(session, { recursive: true });
@@ -317,6 +317,46 @@ test('teste manual enfileira um unico envio para o destinatario escolhido', asyn
     await new Promise(resolve => server.close(resolve));
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('volume persiste connection logs com retencao e snapshot recente', async () => {
+  const root = await tempVolume();
+  try {
+    const repo = await VolumeRepository.open(root);
+    const worker = randomUUID();
+    assert.equal(await repo.lease(worker), true);
+    await repo.log(worker, 'worker_started');
+    await repo.log(worker, 'qr_issued');
+    await repo.log(worker, 'authenticated');
+    await repo.log(worker, 'connected');
+    await repo.markSessionSaved(worker);
+    await repo.log(worker, 'group_catalog_failed', 'group_lookup_timeout');
+    const request = await repo.requestPairingReset();
+    await repo.completePairingReset(worker, request);
+    const snap = await repo.snapshot();
+    assert.equal(snap.logs[0].event, 'pairing_reset_completed');
+    assert.equal(snap.logs.find(row => row.event === 'group_catalog_failed')?.code, 'group_lookup_timeout');
+    assert.ok(snap.logs.some(row => row.event === 'session_saved'));
+    assert.ok(snap.logs.every(row => typeof row.created_at === 'string'));
+    assert.deepEqual(snap.logs.map(row => row.event).slice(0, 4), ['pairing_reset_completed', 'group_catalog_failed', 'session_saved', 'connected']);
+    const persisted = JSON.parse(await readFile(path.join(root, 'mensageria.json'), 'utf8'));
+    assert.ok(Array.isArray(persisted.logs));
+    assert.ok(persisted.logs.length >= 6);
+    for (let i = 0; i < 120; i++) await repo.log(worker, `event_${String(i).padStart(3, '0')}`);
+    const capped = await repo.read();
+    assert.equal(capped.logs.length, 100);
+    assert.equal((await repo.snapshot()).logs.length, 30);
+    assert.equal((await repo.snapshot()).logs[0].event, 'event_119');
+    await repo.mutate(data => {
+      data.logs = [
+        { event: 'ancient', code: null, created_at: new Date(Date.now() - 20 * 24 * 60 * 60 * 1000).toISOString() },
+        { event: 'recent', code: null, created_at: new Date().toISOString() }
+      ];
+    });
+    await repo.cleanup();
+    const pruned = await repo.read();
+    assert.deepEqual(pruned.logs.map(row => row.event), ['recent']);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test('painel local le o volume sem DATABASE_URL e o QR nao fica depois de conectar', async () => {
