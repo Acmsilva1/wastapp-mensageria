@@ -36,16 +36,16 @@ async function savedGroupId(repo, groupId) {
 }
 export async function recipientAddress(client, repo, recipient) {
   if (recipient.target_type !== 'group') {
-    // Conta conectada: o número da sessão na VPS manda; não usa telefone pessoal pinado.
+    // Mensageiro = sessão conectada. Destino = número salvo no painel (E.164).
     const digits = recipient.follow_session
       ? (client.info?.wid?.user || null)
       : String(recipient.phone || '').replace(/^\+/, '');
     if (!/^\d{8,15}$/.test(digits || '')) throw new Error('number_not_registered');
+    // Confirma que o número existe no WhatsApp, mas envia pelo JID de telefone (@c.us).
+    // LID muda entre sessões/contas e já roteou alerta para a conversa "Você" do Business.
     const number = await client.getNumberId(digits);
-    if (!number) throw new Error('number_not_registered');
-    const id=serializedId(number);
-    if(!id) throw new Error('number_not_registered');
-    return id;
+    if (!number || !serializedId(number)) throw new Error('number_not_registered');
+    return `${digits}@c.us`;
   }
   let lookupFailed = false;
   for (let attempt = 0; attempt < 2; attempt++) {
