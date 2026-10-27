@@ -319,6 +319,30 @@ test('teste manual enfileira um unico envio para o destinatario escolhido', asyn
   }
 });
 
+test('snapshot separa fila pendente e erros de envio', async () => {
+  const root = await tempVolume();
+  try {
+    const repo = await VolumeRepository.open(root);
+    const saved = await repo.saveRecipient(recipient());
+    const stamp = new Date().toISOString();
+    await repo.mutate(data => {
+      data.deliveries.push(
+        { id: randomUUID(), source: 'superapp', idempotency_key: 'fila:1', recipient_id: saved.id, audience: 'perfil-a', event_type: 'health.water_progress', title: 'A', message: 'm', status: 'pending', worker_id: null, whatsapp_id: null, error_code: null, created_at: stamp, started_at: null, finished_at: null },
+        { id: randomUUID(), source: 'superapp', idempotency_key: 'fila:2', recipient_id: saved.id, audience: 'perfil-a', event_type: 'health.water_progress', title: 'B', message: 'm', status: 'sending', worker_id: 'w', whatsapp_id: null, error_code: null, created_at: stamp, started_at: stamp, finished_at: null },
+        { id: randomUUID(), source: 'superapp', idempotency_key: 'ok:1', recipient_id: saved.id, audience: 'perfil-a', event_type: 'health.water_progress', title: null, message: null, status: 'sent', worker_id: 'w', whatsapp_id: 'x', error_code: null, created_at: stamp, started_at: stamp, finished_at: stamp },
+        { id: randomUUID(), source: 'superapp', idempotency_key: 'err:1', recipient_id: saved.id, audience: 'perfil-a', event_type: 'health.diet_menu', title: null, message: null, status: 'failed', worker_id: 'w', whatsapp_id: null, error_code: 'send_failed', created_at: stamp, started_at: stamp, finished_at: stamp },
+        { id: randomUUID(), source: 'superapp', idempotency_key: 'err:2', recipient_id: saved.id, audience: 'perfil-a', event_type: 'financeiro.daily_summary', title: null, message: null, status: 'uncertain', worker_id: 'w', whatsapp_id: null, error_code: 'send_timeout', created_at: stamp, started_at: stamp, finished_at: stamp }
+      );
+    });
+    const snap = await repo.snapshot();
+    assert.deepEqual(snap.deliveries.map(row => row.status).sort(), ['pending', 'sending']);
+    assert.deepEqual(snap.delivery_errors.map(row => row.status).sort(), ['failed', 'uncertain']);
+    assert.equal(snap.delivery_errors.find(row => row.status === 'failed')?.error_code, 'send_failed');
+    assert.ok(snap.deliveries.every(row => row.name === 'Teste'));
+    assert.equal(snap.logs.length, 0);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test('volume persiste connection logs com retencao e snapshot recente', async () => {
   const root = await tempVolume();
   try {

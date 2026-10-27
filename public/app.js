@@ -188,13 +188,26 @@ function render(data) {
   $('#backup-status').textContent = s.session_saved_at ? `Backup remoto: ${time(s.session_saved_at)}` : 'Aguardando primeiro backup remoto';
   const recipientSignature = JSON.stringify(data.recipients);
   if (lastSnapshot !== recipientSignature) { renderRecipients(data.recipients); lastSnapshot = recipientSignature; }
-  const deliveries = $('#delivery-list'); deliveries.replaceChildren();
-  for (const row of data.deliveries) { const tr = element('tr'); for (const [index, value] of [row.name, events[row.event_type] || row.event_type, deliveryLabels[row.status] || row.status, time(row.created_at)].entries()) { const td = element('td', value); if (index === 2 && row.error_code) td.append(element('small', deliveryErrorLabels[row.error_code] || 'O serviço não confirmou o envio. Confira a conexão e o destinatário.', 'delivery-error')); tr.append(td); } deliveries.append(tr); }
-  if (!data.deliveries.length) { const tr = element('tr'); const td = element('td', 'Nenhum envio registrado.'); td.colSpan = 4; tr.append(td); deliveries.append(tr); }
+  renderDeliveryRows($('#delivery-list'), data.deliveries || [], 'Nenhum envio na fila.');
+  renderDeliveryRows($('#delivery-errors'), data.delivery_errors || [], 'Nenhuma falha de envio registrada.');
   const logs = $('#connection-logs'); logs.replaceChildren();
   for (const row of data.logs) { const item = element('div', undefined, 'log'); const description = element('div', logLabels[row.event] || 'Evento de conexão'); if (row.code) description.append(element('small', row.code)); item.append(description, element('span', time(row.created_at), 'muted')); logs.append(item); }
   if (!data.logs.length) logs.append(element('p', 'Nenhum evento de conexão registrado.', 'empty'));
   $('#refresh-time').textContent = `Atualizado às ${new Date().toLocaleTimeString('pt-BR')}`;
+}
+function renderDeliveryRows(tbody, rows, emptyText) {
+  tbody.replaceChildren();
+  for (const row of rows) {
+    const tr = element('tr');
+    const stamp = row.finished_at || row.created_at;
+    for (const [index, value] of [row.name, events[row.event_type] || row.event_type, deliveryLabels[row.status] || row.status, time(stamp)].entries()) {
+      const td = element('td', value);
+      if (index === 2 && row.error_code) td.append(element('small', deliveryErrorLabels[row.error_code] || 'O serviço não confirmou o envio. Confira a conexão e o destinatário.', 'delivery-error'));
+      tr.append(td);
+    }
+    tbody.append(tr);
+  }
+  if (!rows.length) { const tr = element('tr'); const td = element('td', emptyText); td.colSpan = 4; tr.append(td); tbody.append(tr); }
 }
 async function refresh() { if (!loggedIn || polling) return; polling = true; try { render(await api('snapshot')); } catch (error) { toast(error.message, true); } finally { polling = false; } }
 $('#login-form').onsubmit = async event => { event.preventDefault(); const form = event.currentTarget; const button = form.querySelector('button'); button.disabled = true; try { await api('login', { token: form.elements.token.value }); form.reset(); showDashboard(false); await refresh(); } catch (error) { toast(error.message, true); } finally { button.disabled = false; } };
@@ -224,7 +237,7 @@ $('#recipient-form').onsubmit = async event => { event.preventDefault(); if (sav
 };
 const paneCopy = {
   connect: ['Conectividade', 'Conta do WhatsApp, status e pareamento.'],
-  logs: ['Logs', 'Últimos envios e eventos desta seção.'],
+  logs: ['Logs', 'Fila de envios, falhas de entrega e eventos de conexão.'],
   alerts: ['Adicionar alertas', 'Cadastre destinatários e escolha os alertas e as permissões de cada pessoa.']
 };
 function showTab(name) {
