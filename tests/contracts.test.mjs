@@ -48,7 +48,7 @@ test('AES autentica o backup e cookies expiram sem aceitar adulteracao', () => {
   assert.equal(validSession(cookie, 'wrong', 1001), false);
   assert.equal(validSession(cookie, 'secret', 1000 + 8 * 3600000), false);
 });
-test('alertas vão aos numeros salvos com a flag; conta conectada e desativados nao recebem', async () => {
+test('financeiro faz fan-out por flag; agua e dieta so para a Ref do perfil', async () => {
   await reset();
   const one = await repo.saveRecipient(recipient({ phone: '+5511900000001', audience: '1', events: ['financeiro.daily_summary', 'health.water_progress', 'health.diet_menu'] }));
   const two = await repo.saveRecipient(recipient({ phone: '+5521900000002', audience: '2', events: ['financeiro.daily_summary', 'health.water_progress', 'health.diet_menu'] }));
@@ -58,25 +58,26 @@ test('alertas vão aos numeros salvos com a flag; conta conectada e desativados 
   const moneyIds = (await db.query("select recipient_id from mensageria.deliveries where event_type='financeiro.daily_summary'")).rows.map(row => row.recipient_id).sort();
   assert.deepEqual(moneyIds, [one.id, two.id].sort());
   assert.equal(moneyIds.includes(dietOnly.id), false);
-  const water = await repo.enqueue(alert({ audience: '9', event_type: 'health.water_progress', idempotency_key: 'agua:1' }));
-  assert.equal(water.jobs.length, 2);
-  const waterIds = (await db.query("select recipient_id from mensageria.deliveries where event_type='health.water_progress'")).rows.map(row => row.recipient_id).sort();
-  assert.deepEqual(waterIds, [one.id, two.id].sort());
-  const diet = await repo.enqueue(alert({ audience: '9', event_type: 'health.diet_menu', idempotency_key: 'dieta:1', title: 'Almoco', message: 'Menu do dia.' }));
-  assert.equal(diet.jobs.length, 3);
+  await assert.rejects(repo.enqueue(alert({ audience: '9', event_type: 'health.water_progress', idempotency_key: 'agua:1' })), /no_authorized_recipients/);
+  const water = await repo.enqueue(alert({ audience: '1', event_type: 'health.water_progress', idempotency_key: 'agua:1b' }));
+  assert.equal(water.jobs.length, 1);
+  const waterIds = (await db.query("select recipient_id from mensageria.deliveries where event_type='health.water_progress'")).rows.map(row => row.recipient_id);
+  assert.deepEqual(waterIds, [one.id]);
+  const diet = await repo.enqueue(alert({ audience: '2', event_type: 'health.diet_menu', idempotency_key: 'dieta:1', title: 'Almoco', message: 'Menu do dia.' }));
+  assert.equal(diet.jobs.length, 2);
   const dietIds = (await db.query("select recipient_id from mensageria.deliveries where event_type='health.diet_menu'")).rows.map(row => row.recipient_id).sort();
-  assert.deepEqual(dietIds, [one.id, two.id, dietOnly.id].sort());
+  assert.deepEqual(dietIds, [two.id, dietOnly.id].sort());
 });
-test('fila separa tipos e destinatarios desativados; perfil do evento nao limita o contato salvo', async () => {
+test('fila separa tipos e destinatarios desativados; agua/dieta exigem Ref do perfil', async () => {
   await reset();
   const accepted = await repo.saveRecipient(recipient());
-  const otherProfile = await repo.saveRecipient(recipient({ phone: '+5521900000000', audience: 'perfil-b' }));
+  await repo.saveRecipient(recipient({ phone: '+5521900000000', audience: 'perfil-b' }));
   await repo.saveRecipient(recipient({ phone: '+5531900000000', events: ['health.diet_menu'] }));
   await repo.saveRecipient(recipient({ phone: '+5541900000000', enabled: false }));
   const result = await repo.enqueue(alert());
-  assert.equal(result.jobs.length, 2);
-  const ids = (await db.query('select recipient_id from mensageria.deliveries')).rows.map(row => row.recipient_id).sort();
-  assert.deepEqual(ids, [accepted.id, otherProfile.id].sort());
+  assert.equal(result.jobs.length, 1);
+  const ids = (await db.query('select recipient_id from mensageria.deliveries')).rows.map(row => row.recipient_id);
+  assert.deepEqual(ids, [accepted.id]);
   await assert.rejects(repo.enqueue(alert({ event_type: 'financeiro.daily_summary', idempotency_key: 'outro', title: 'Resumo', message: 'x' })), /no_authorized_recipients/);
 });
 test('repeticao da chave nao duplica envio; mudanca de conteudo retorna conflito', async () => {

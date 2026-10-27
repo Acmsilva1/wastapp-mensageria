@@ -200,7 +200,7 @@ test('envio interrompido ou vencido nao libera a mesma chave', async () => {
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test('envio segue as flags dos destinatarios; audience so identifica o evento', async () => {
+test('financeiro faz fan-out por flag; agua e dieta so para o perfil da Ref', async () => {
   const root = await tempVolume();
   try {
     const repo = await VolumeRepository.open(root);
@@ -222,23 +222,31 @@ test('envio segue as flags dos destinatarios; audience so identifica o evento', 
     assert.equal(financeIds.includes(phoneOff.id), false);
     assert.equal(financeIds.includes(disabled.id), false);
     const water = await repo.enqueue(alert({ audience: '1', event_type: 'health.water_progress', idempotency_key: 'agua:1' }));
-    assert.equal(water.jobs.length, 4);
+    assert.equal(water.jobs.length, 1);
+    const afterWater = JSON.parse(await readFile(path.join(root, 'mensageria.json'), 'utf8'));
+    assert.deepEqual(afterWater.deliveries.filter(item => item.idempotency_key === 'agua:1').map(item => item.recipient_id), [phone1.id]);
     const diet = await repo.enqueue(alert({ audience: '1', event_type: 'health.diet_menu', idempotency_key: 'dieta:1', title: 'Almoco', message: 'Menu do dia' }));
-    assert.equal(diet.jobs.length, 3);
+    assert.equal(diet.jobs.length, 1);
+    const diet2 = await repo.enqueue(alert({ audience: '2', event_type: 'health.diet_menu', idempotency_key: 'dieta:2', title: 'Jantar', message: 'Menu dela' }));
+    assert.equal(diet2.jobs.length, 2);
+    const afterDiet = JSON.parse(await readFile(path.join(root, 'mensageria.json'), 'utf8'));
+    assert.deepEqual(afterDiet.deliveries.filter(item => item.idempotency_key === 'dieta:1').map(item => item.recipient_id), [phone1.id]);
+    assert.deepEqual(afterDiet.deliveries.filter(item => item.idempotency_key === 'dieta:2').map(item => item.recipient_id).sort(), [phone2.id, phoneOff.id].sort());
     const claimed = [];
     for (;;) {
       const job = await repo.claim(worker);
       if (!job) break;
-      claimed.push(`${job.recipient_id}:${job.event_type}`);
+      claimed.push(`${job.recipient_id}:${job.event_type}:${job.idempotency_key}`);
       await repo.finish(worker, job.id, 'sent');
     }
-    const of = event => claimed.filter(item => item.endsWith(`:${event}`)).map(item => item.slice(0, item.lastIndexOf(':'))).sort();
-    assert.deepEqual(of('financeiro.daily_summary'), [phone1.id, phone2.id, group2.id].sort());
-    assert.deepEqual(of('health.water_progress'), [phone1.id, phone2.id, phoneOff.id, group2.id].sort());
-    assert.deepEqual(of('health.diet_menu'), [phone1.id, phone2.id, phoneOff.id].sort());
+    const of = (event, key) => claimed.filter(item => item.includes(`:${event}:${key}`)).map(item => item.slice(0, item.indexOf(':'))).sort();
+    assert.deepEqual(of('financeiro.daily_summary', 'fin:1'), [phone1.id, phone2.id, group2.id].sort());
+    assert.deepEqual(of('health.water_progress', 'agua:1'), [phone1.id]);
+    assert.deepEqual(of('health.diet_menu', 'dieta:1'), [phone1.id]);
+    assert.deepEqual(of('health.diet_menu', 'dieta:2'), [phone2.id, phoneOff.id].sort());
     const after = JSON.parse(await readFile(path.join(root, 'mensageria.json'), 'utf8'));
     assert.equal(after.deliveries.some(item => item.status === 'cancelled'), false);
-    assert.equal(after.ingress.length, 3);
+    assert.equal(after.ingress.length, 4);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
