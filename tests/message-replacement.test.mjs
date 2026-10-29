@@ -173,3 +173,60 @@ test('limpeza local e exclusiva da propria conversa PN/LID com autoria, destino 
  fromMe=true;assert.equal((await revokeOwnMessageInPage('different-id',mePn)).code,'delete_not_bot_message');assert.equal(local,2);assert.equal(revoked,0);
  }finally{if(prior===undefined)delete globalThis.window;else globalThis.window=prior;}
 });
+
+test('enquete aguarda a revogacao real e confirma que saiu do modelo do WhatsApp',async()=>{
+ const prior=globalThis.window,address='5511900000000@c.us';let present=true,actionCalls=0,cmdCalls=0;
+ const message={id:{fromMe:true,_serialized:'poll-id',remote:{_serialized:address}},type:'poll_creation'};
+ try{
+ globalThis.window={require:name=>({
+  WAWebCollections:{Msg:{get:()=>present?message:null,getMessagesById:async()=>({messages:[]})},Chat:{get:()=>({id:{_serialized:address}})}},
+  WAWebMsgActionCapability:{canSenderRevokeMsg:()=>true},
+  WAWebRevokeMsgAction:{sendRevoke:async(record,type,clear)=>{assert.deepEqual(record,{type:'message',data:message});assert.equal(type,'Sender');assert.equal(clear,true);actionCalls++;await Promise.resolve();present=false;return {messageSendResult:'OK'};}},
+  WAWebCmd:{Cmd:{sendRevokeMsgs:()=>{cmdCalls++;}}}
+ })[name]};
+ assert.deepEqual(await revokeOwnMessageInPage('poll-id',address),{ok:true,mode:'everyone'});assert.equal(actionCalls,1);assert.equal(present,false);assert.equal(cmdCalls,0);
+ }finally{if(prior===undefined)delete globalThis.window;else globalThis.window=prior;}
+});
+
+test('enquete que permanece no WhatsApp nao recebe falso sucesso de exclusao',async()=>{
+ const prior=globalThis.window,address='5511900000000@c.us';
+ const message={id:{fromMe:true,_serialized:'poll-id',remote:{_serialized:address}},type:'poll_creation'};
+ try{
+ globalThis.window={require:name=>({
+  WAWebCollections:{Msg:{get:()=>message,getMessagesById:async()=>({messages:[message]})},Chat:{get:()=>({id:{_serialized:address}})}},
+  WAWebMsgActionCapability:{canSenderRevokeMsg:()=>true},
+  WAWebRevokeMsgAction:{sendRevoke:async()=>({messageSendResult:'OK'})}
+ })[name]};
+ assert.deepEqual(await revokeOwnMessageInPage('poll-id',address),{ok:false,code:'delete_unconfirmed',terminal:false});
+ }finally{if(prior===undefined)delete globalThis.window;else globalThis.window=prior;}
+});
+
+test('enquete sem permissao, de outra conversa ou de outra pessoa nunca e revogada',async()=>{
+ const prior=globalThis.window,address='5511900000000@c.us';let calls=0,allowed=false;
+ const message={id:{fromMe:true,_serialized:'poll-id',remote:{_serialized:address}},type:'poll_creation'};
+ try{
+ globalThis.window={require:name=>({
+  WAWebCollections:{Msg:{get:()=>message,getMessagesById:async()=>({messages:[message]})},Chat:{get:()=>({id:{_serialized:address}})}},
+  WAWebMsgActionCapability:{canSenderRevokeMsg:()=>allowed},
+  WAWebRevokeMsgAction:{sendRevoke:async()=>{calls++;return {messageSendResult:'OK'};}}
+ })[name]};
+ assert.equal((await revokeOwnMessageInPage('poll-id',address)).code,'delete_not_revocable');
+ allowed=true;message.id.fromMe=false;assert.equal((await revokeOwnMessageInPage('poll-id',address)).code,'delete_not_bot_message');
+ message.id.fromMe=true;assert.equal((await revokeOwnMessageInPage('poll-id','5511999999999@c.us')).code,'delete_wrong_conversation');assert.equal(calls,0);
+ }finally{if(prior===undefined)delete globalThis.window;else globalThis.window=prior;}
+});
+
+test('falha ou ausencia da acao de enquete preserva tentativa para retry sem usar exclusao local',async()=>{
+ const prior=globalThis.window,address='5511900000000@c.us';let result='ERROR',local=0;
+ const message={id:{fromMe:true,_serialized:'poll-id',remote:{_serialized:address}},type:'poll_creation'};
+ try{
+ globalThis.window={require:name=>({
+  WAWebCollections:{Msg:{get:()=>message,getMessagesById:async()=>({messages:[message]})},Chat:{get:()=>({id:{_serialized:address}})}},
+  WAWebMsgActionCapability:{canSenderRevokeMsg:()=>true},
+  WAWebRevokeMsgAction:result===null?{}:{sendRevoke:async()=>({messageSendResult:result})},
+  WAWebCmd:{Cmd:{sendDeleteMsgs:()=>{local++;}}}
+ })[name]};
+ assert.deepEqual(await revokeOwnMessageInPage('poll-id',address),{ok:false,code:'delete_unconfirmed',terminal:false});
+ result=null;assert.deepEqual(await revokeOwnMessageInPage('poll-id',address),{ok:false,code:'delete_capability_unavailable',terminal:false});assert.equal(local,0);
+ }finally{if(prior===undefined)delete globalThis.window;else globalThis.window=prior;}
+});

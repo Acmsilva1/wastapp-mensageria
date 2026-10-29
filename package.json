@@ -7,13 +7,14 @@
     "demo": "node scripts/serve.mjs --demo",
     "check": "node scripts/check.mjs",
     "build": "node scripts/check.mjs",
-    "test": "node --test --experimental-test-isolation=none tests/contracts.test.mjs tests/diagnostics.test.mjs tests/groups.test.mjs tests/outbound-message.test.mjs tests/volume.test.mjs tests/water-replies.test.mjs tests/serialized-id-compat.test.mjs tests/message-replacement.test.mjs tests/whatsapp-purchases.test.mjs tests/interaction-permissions.test.mjs tests/agent-channel.test.mjs",
+    "test": "node --test --experimental-test-isolation=none tests/contracts.test.mjs tests/diagnostics.test.mjs tests/groups.test.mjs tests/outbound-message.test.mjs tests/volume.test.mjs tests/water-replies.test.mjs tests/serialized-id-compat.test.mjs tests/message-replacement.test.mjs tests/whatsapp-purchases.test.mjs tests/interaction-permissions.test.mjs tests/agent-channel.test.mjs tests/pwa.test.mjs tests/infra-status.test.mjs tests/contact-crud.test.mjs",
     "secrets": "node scripts/generate-secrets.mjs",
     "worker": "node worker/index.mjs",
     "worker:local": "node --env-file=.env.local worker/index.mjs",
     "painel:legado": "node server.mjs",
     "webjs": "node webjs.cjs",
-    "baileys": "node baileys.mjs"
+    "baileys": "node baileys.mjs",
+    "pwa:version": "node scripts/sync-pwa-version.mjs"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "7.0.0-rc14",

@@ -1,3 +1,4 @@
+import './sync-pwa-version.mjs';
 import { spawnSync } from 'node:child_process';
 import { readdir, readFile } from 'node:fs/promises';
 const roots = ['lib', 'api', 'worker', 'scripts', 'tests', 'public'];

@@ -14,6 +14,14 @@ export async function revokeOwnMessageInPage(messageId,address) {
   if(message.id?.fromMe!==true || id(message.id)!==messageId)return {ok:false,code:'delete_not_bot_message',terminal:true};
   if(id(message.id.remote)!==address)return {ok:false,code:'delete_wrong_conversation',terminal:true};
   if(message.type==='revoked')return {ok:true};
+  const confirmPollDeletion=async()=>{
+    for(let attempt=0;attempt<12;attempt++) {
+      const remaining=store.Msg.get(messageId) || (await store.Msg.getMessagesById([messageId]))?.messages?.[0];
+      if(!remaining || remaining.type==='revoked')return {ok:true,mode:'everyone'};
+      await new Promise(resolve=>setTimeout(resolve,100));
+    }
+    return {ok:false,code:'delete_unconfirmed',terminal:false};
+  };
   let self=false;
   try {
     const me=window.require('WAWebUserPrefsMeUser');
@@ -29,6 +37,10 @@ export async function revokeOwnMessageInPage(messageId,address) {
     } else {
       await Cmd.sendDeleteMsgs(chat,[message],true);
     }
+    if(message.type==='poll_creation') {
+      const result=await confirmPollDeletion();
+      return result.ok?{ok:true,mode:'self'}:result;
+    }
     return {ok:true,mode:'self'};
   }
   const capability=window.require('WAWebMsgActionCapability');
@@ -36,6 +48,15 @@ export async function revokeOwnMessageInPage(messageId,address) {
   if(!await capability.canSenderRevokeMsg(message))return {ok:false,code:'delete_not_revocable',terminal:true};
   const chat=store.Chat.get(message.id.remote) || await store.Chat.find(message.id.remote);
   if(!chat || id(chat.id)!==address)return {ok:false,code:'delete_chat_unavailable',terminal:false};
+  if(message.type==='poll_creation') {
+    // Cmd apenas dispara um evento; para enquetes ele pode retornar sem revogar.
+    let action;
+    try {action=window.require('WAWebRevokeMsgAction');}catch{}
+    if(typeof action?.sendRevoke!=='function')return {ok:false,code:'delete_capability_unavailable',terminal:false};
+    const result=await action.sendRevoke({type:'message',data:message},'Sender',true);
+    if(result?.messageSendResult!=='OK')return {ok:false,code:'delete_unconfirmed',terminal:false};
+    return confirmPollDeletion();
+  }
   const {Cmd}=window.require('WAWebCmd');
   if(typeof Cmd?.sendRevokeMsgs!=='function')return {ok:false,code:'delete_capability_unavailable',terminal:false};
   if(window.WWebJS.compareWwebVersions(window.Debug.VERSION,'>=','2.3000.0')) {

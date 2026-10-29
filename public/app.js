@@ -33,7 +33,8 @@ const messages = {
   group_invalid: 'Selecione um grupo válido da lista da conta conectada.',
   group_id_invalid: 'Selecione um grupo válido da lista da conta conectada.',
   phone_requires_country_code: 'Informe o número com +, DDI e DDD. Exemplo: +55 11 99999-9999.', origin_rejected: 'O endereço do painel difere do APP_ORIGIN configurado.',
-  recipient_not_found: 'Destinatário não encontrado.',
+  recipient_not_found: 'Contato não encontrado.',
+  recipient_delete_confirmation_required: 'Confirme a exclusão do contato.',
   recipient_disabled: 'Ative o destinatário antes de testar.',
   connected_recipient_no_test: 'A conta conectada é só o mensageiro; teste um número ou grupo salvo.',
   recipient_no_test_events: 'Este destinatário não tem alerta de texto para teste (água/dieta/financeiro).',
@@ -56,10 +57,11 @@ let polling = false;
 let loggedIn = false;
 let lastSnapshot = '';
 let toastTimer;
+let editorDirty=false;
 const ERRORS_PAGE_SIZE = 10;
 let deliveryErrors = [];
 let deliveryErrorsPage = 1;
-function toast(message, error = false) { $('#toast').textContent = message; $('#toast').className = error ? 'error' : ''; $('#toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('#toast').hidden = true; }, 6500); }
+function toast(message,error=false){window.AppUI.toast(message,{error});}
 async function api(action, body) {
   const response = await fetch(`/api/control?action=${action}`, { method: body === undefined ? 'GET' : 'POST', credentials: 'same-origin', cache: 'no-store', headers: { 'Content-Type': 'application/json', 'X-Panel-Request': '1' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   const data = await response.json();
@@ -68,37 +70,27 @@ async function api(action, body) {
 }
 function element(tag, text, className) { const el = document.createElement(tag); if (text !== undefined) el.textContent = text; if (className) el.className = className; return el; }
 const time = value => value ? new Date(value).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '—';
-function showLogin() { loggedIn = false; groupCatalog = []; groupsLoaded = false; resetForm(); lastSnapshot = ''; $('#recipient-list').replaceChildren(); updateGroupOptions(); $('#login').hidden = false; $('#dashboard').hidden = true; $('#logout').hidden = true; $('#qr').removeAttribute('src'); }
+function showLogin() { window.AppUI.closeConfirmation(); $('#recipient-dialog').close(); loggedIn = false; groupCatalog = []; groupsLoaded = false; resetForm(); lastSnapshot = ''; $('#recipient-list').replaceChildren(); updateGroupOptions(); $('#login').hidden = false; $('#dashboard').hidden = true; $('#logout').hidden = true; $('#qr').removeAttribute('src'); }
 function showDashboard(demo) { loggedIn = true; $('#login').hidden = true; $('#dashboard').hidden = false; $('#logout').hidden = demo; $('#demo-note').hidden = !demo; $('#environment').textContent = demo ? 'Demonstração local' : 'WhatsApp'; }
 function renderRecipients(rows) {
-  currentRecipients = rows;
-  $('#recipient-count').textContent = String(rows.length);
-  const container = $('#recipient-list'); container.replaceChildren();
-  if (!rows.length) { container.append(element('p', 'Nenhum destinatário cadastrado.', 'empty')); return; }
-  for (const r of rows) {
-    const card = element('article', undefined, 'recipient');
-    const head = element('div', undefined, 'recipient-head');
-    head.append(element('strong', r.name), element('span', r.enabled ? 'Ativo' : 'Inativo', `pill ${r.enabled ? 'ok' : 'off'}`));
-    card.append(head, element('div', r.target_type === 'group' ? 'Grupo do WhatsApp' : r.follow_session ? `Sessão (não recebe alertas de perfil)${r.phone ? ` · ${r.phone}` : ''}` : r.phone, 'recipient-phone'), element('div', `Ref.: ${r.audience}`, 'recipient-profile'));
-    const tags = element('div', undefined, 'tags'); for (const type of r.events) tags.append(element('span', events[type] || type, 'tag')); if (r.permissions?.includes('purchases.record')) tags.append(element('span', 'Pode enviar compras', 'tag')); card.append(tags);
-    const actions = element('div', undefined, 'recipient-actions');
-    const edit = element('button', 'Editar', 'quiet'); edit.type = 'button'; edit.onclick = () => editRecipient(r);
-    const test = element('button', 'Testar', 'quiet'); test.type = 'button';
-    test.disabled = !r.enabled || Boolean(r.follow_session);
-    test.title = r.follow_session ? 'Conta conectada não recebe teste' : r.enabled ? 'Envia uma mensagem de teste só para este destinatário' : 'Ative o destinatário para testar';
-    test.onclick = async () => {
-      if (test.disabled) return;
-      test.disabled = true;
-      try {
-        const data = await api('recipient-test', { id: r.id });
-        toast(`Teste enfileirado para ${data.job?.name || r.name}. Confira o celular e a aba Logs.`);
-        await refresh();
-      } catch (error) { toast(error.message, true); }
-      finally { test.disabled = !r.enabled || Boolean(r.follow_session); }
-    };
-    const toggle = element('button', r.enabled ? 'Desativar' : 'Ativar', 'quiet'); toggle.type = 'button';
-    toggle.onclick = async () => { toggle.disabled = true; try { await api('recipient-toggle', { id: r.id, enabled: !r.enabled }); toast(r.enabled ? 'Destinatário desativado.' : 'Destinatário ativado.'); await refresh(); } catch (error) { toast(error.message, true); } finally { toggle.disabled = false; } };
-    actions.append(edit, test, toggle); card.append(actions); container.append(card);
+  currentRecipients=rows;
+  $('#recipient-count').textContent=String(rows.length);
+  const query=$('#recipient-search').value.trim().toLocaleLowerCase('pt-BR'),status=$('#recipient-status').value;
+  const visible=rows.filter(r=>(status==='all'||(status==='active'?r.enabled:!r.enabled))&&[r.name,r.phone,r.audience].join(' ').toLocaleLowerCase('pt-BR').includes(query));
+  const container=$('#recipient-list');container.replaceChildren();
+  $('#contact-results').textContent=visible.length+' de '+rows.length+' contatos';
+  if(!visible.length){const empty=element('div',undefined,'contact-empty');empty.append(element('strong',rows.length?'Nenhum contato encontrado':'Sua lista começa aqui'),element('p',rows.length?'Ajuste a busca ou o filtro de situação.':'Use Inserir novo alerta para cadastrar um contato e suas preferências.'));container.append(empty);return;}
+  for(const r of visible){
+    const card=element('article',undefined,'recipient'),identity=element('div',undefined,'contact-identity'),avatar=element('div',Array.from(r.name.trim())[0]?.toUpperCase()||'C','contact-avatar'),title=element('div',undefined,'contact-title'),line=element('div',undefined,'contact-name-line');
+    line.append(element('strong',r.name),element('span',r.enabled?'Ativo':'Inativo','pill '+(r.enabled?'ok':'')));title.append(line,element('div',(r.target_type==='group'?'Grupo do WhatsApp':r.follow_session?'Conta remetente':r.phone)+' · Perfil '+r.audience,'contact-description'));identity.append(avatar,title);card.append(identity);
+    const tags=element('div',undefined,'tags');for(const e of r.events)tags.append(element('span',events[e]||e,'tag'));if(r.permissions?.includes('purchases.record'))tags.append(element('span','Pode enviar compras','tag'));card.append(tags);
+    const actions=element('div',undefined,'recipient-actions');
+    const edit=element('button','Editar','quiet');edit.type='button';edit.setAttribute('aria-label','Editar '+r.name);edit.onclick=()=>editRecipient(r);
+    const test=element('button','Testar','quiet');test.type='button';test.disabled=!r.enabled||Boolean(r.follow_session);test.title='Enviar uma mensagem de teste somente para este contato';
+    test.onclick=async()=>{if(!await AppUI.confirm({title:'Enviar teste?',message:'Uma mensagem de teste será enviada somente para '+r.name+'.',confirmLabel:'Enviar teste'}))return;test.disabled=true;try{const data=await api('recipient-test',{id:r.id});toast('Teste enfileirado para '+(data.job?.name||r.name)+'. Confira o celular e a seção Logs.');await refresh();}catch(error){toast(error.message,true);}finally{test.disabled=!r.enabled||Boolean(r.follow_session);}};
+    const toggle=element('button',r.enabled?'Desativar':'Ativar','quiet');toggle.type='button';toggle.onclick=async()=>{if(!await AppUI.confirm({title:(r.enabled?'Desativar':'Ativar')+' contato?',message:r.enabled?'Os próximos alertas para '+r.name+' serão interrompidos.':'Os alertas habilitados voltarão a ser enviados para '+r.name+'.',confirmLabel:r.enabled?'Desativar':'Ativar',danger:r.enabled}))return;toggle.disabled=true;try{await api('recipient-toggle',{id:r.id,enabled:!r.enabled});toast(r.enabled?'Contato desativado.':'Contato ativado.');await refresh();}catch(error){toast(error.message,true);}finally{toggle.disabled=false;}};
+    const remove=element('button','Excluir','quiet danger-button');remove.type='button';remove.setAttribute('aria-label','Excluir '+r.name);remove.onclick=async()=>{if(!await AppUI.confirm({title:'Excluir contato?',message:r.name+' será removido da lista e deixará de receber novos alertas. O histórico será preservado.',confirmLabel:'Excluir contato',danger:true}))return;remove.disabled=true;try{await api('recipient-delete',{id:r.id,confirm:'delete_recipient'});toast('Contato excluído. O histórico foi preservado.');lastSnapshot='';await refresh();}catch(error){toast(error.message,true);}finally{remove.disabled=false;}};
+    actions.append(edit,test,toggle,remove);card.append(actions);container.append(card);
   }
 }
 function updateGroupOptions() {
@@ -117,6 +109,7 @@ function updateTargetFields() {
   const connected = type === 'connected';
   $('#interaction-fields').hidden = group;
   form.querySelector('[name=events][value="agent.notice"]').disabled=group;
+  form.querySelector('[name=events][value="infra.vps_status"]').disabled=group||connected;
   for (const input of form.querySelectorAll('[name=permissions]')) input.disabled = group;
   $('#phone-field').hidden = group || connected; $('#group-field').hidden = !group; $('#connected-help').hidden = !connected;
   form.elements.phone.disabled = group || connected; form.elements.phone.required = !group && !connected;
@@ -173,9 +166,9 @@ function editRecipient(r) {
   form.elements.enabled.checked = r.enabled;
   for (const input of form.querySelectorAll('[name=events]')) input.checked = r.events.includes(input.value);
   for (const input of form.querySelectorAll('[name=permissions]')) input.checked = (r.permissions || []).includes(input.value);
-  $('#form-title').textContent = 'Editar destinatário'; $('#recipient-mode-label').textContent = 'Destino e perfil mantidos'; $('#cancel-edit').hidden = false; form.elements.name.focus();
+  $('#form-title').textContent = 'Editar contato'; $('#recipient-mode-label').textContent = 'Destino e perfil mantidos'; $('#cancel-edit').hidden = false; openRecipientDialog(); form.elements.name.focus();
 }
-function resetForm() { const form = $('#recipient-form'); editingRecipient = null; formGeneration++; form.reset(); form.elements.phone.readOnly = false; form.elements.audience.readOnly = false; $('#form-title').textContent = 'Adicionar destinatário'; $('#recipient-mode-label').textContent = 'Número ou grupo'; $('#group-status').textContent = ''; $('#cancel-edit').hidden = true; updateTargetFields(); }
+function resetForm() { $('#recipient-dialog').close(); editorDirty=false; const form = $('#recipient-form'); editingRecipient = null; formGeneration++; form.reset(); form.elements.phone.readOnly = false; form.elements.audience.readOnly = false; $('#form-title').textContent = 'Adicionar destinatário'; $('#recipient-mode-label').textContent = 'Número ou grupo'; $('#group-status').textContent = ''; $('#cancel-edit').hidden = false; updateTargetFields(); }
 function render(data) {
   events = data.events;
   const s = data.state;
@@ -244,9 +237,9 @@ function renderDeliveryErrorsPage() {
 }
 async function refresh() { if (!loggedIn || polling) return; polling = true; try { render(await api('snapshot')); } catch (error) { toast(error.message, true); } finally { polling = false; } }
 $('#login-form').onsubmit = async event => { event.preventDefault(); const form = event.currentTarget; const button = form.querySelector('button'); button.disabled = true; try { await api('login', { token: form.elements.token.value }); form.reset(); showDashboard(false); await refresh(); } catch (error) { toast(error.message, true); } finally { button.disabled = false; } };
-$('#logout').onclick = async () => { try { await api('logout', {}); showLogin(); } catch (error) { toast(error.message, true); } };
+$('#logout').onclick = async () => { if(!await AppUI.confirm({title:'Sair da mensageria?',message:'Você precisará informar a chave administrativa para entrar novamente.',confirmLabel:'Sair'}))return; try { await api('logout', {}); showLogin(); } catch (error) { toast(error.message, true); } };
 $('#pairing-reset').onclick = async () => {
-  if (!window.confirm('Gerar um novo QR encerra a sessão atual neste serviço. Será necessário escanear com o número remetente. Destinatários e histórico serão mantidos. Continuar?')) return;
+  if(!await AppUI.confirm({title:'Gerar novo QR Code?',message:'A sessão atual será encerrada. Será necessário escanear com o número remetente. Contatos e histórico serão mantidos.',confirmLabel:'Gerar novo QR',danger:true}))return;
   const button = $('#pairing-reset'); button.disabled = true;
   try {
     await api('pairing-reset', { confirm: 'reset_pairing' });
@@ -255,7 +248,7 @@ $('#pairing-reset').onclick = async () => {
     await refresh();
   } catch (error) { toast(error.message, true); button.disabled = false; }
 };
-$('#cancel-edit').onclick = resetForm;
+$('#cancel-edit').onclick=closeRecipientDialog;
 $('#refresh-groups').onclick = loadGroups;
 $('#recipient-form').elements.target_type.onchange = () => { updateTargetFields(); if ($('#recipient-form').elements.target_type.value === 'group' && !groupsLoaded) loadGroups(); };
 $('#recipient-form').elements.group_id.onchange = () => { const form = $('#recipient-form'); const group = groupCatalog.find(item => item.id === form.elements.group_id.value); if (group && !form.elements.name.value.trim()) form.elements.name.value = group.name; };
@@ -266,12 +259,12 @@ $('#recipient-form').onsubmit = async event => { event.preventDefault(); if (sav
   if (targetType === 'group') payload.group_id = editingRecipient?.group_id || form.elements.group_id.value;
   else if (selectedType !== 'connected') payload.phone = editingRecipient?.phone || data.get('phone');
   savingRecipient = true; button.disabled = true; $('#cancel-edit').disabled = true; updateTargetFields();
-  try { await api('recipients', payload); resetForm(); toast('Destinatário salvo.'); await refresh(); } catch (error) { toast(error.message, true); } finally { savingRecipient = false; button.disabled = false; $('#cancel-edit').disabled = false; updateTargetFields(); }
+  try { await api('recipients', payload); const wasEditing=Boolean(editingRecipient); resetForm(); toast(wasEditing?'Contato atualizado.':'Contato salvo.'); await refresh(); } catch (error) { toast(error.message, true); } finally { savingRecipient = false; button.disabled = false; $('#cancel-edit').disabled = false; updateTargetFields(); }
 };
 const paneCopy = {
   connect: ['Conectividade', 'Conta do WhatsApp, status e pareamento.'],
   logs: ['Logs', 'Fila de envios, falhas de entrega e eventos de conexão.'],
-  alerts: ['Adicionar alertas', 'Cadastre destinatários e escolha os alertas e as permissões de cada pessoa.']
+  alerts: ['Contatos e alertas', 'Uma lista organizada de contatos, notificações e permissões.']
 };
 function showTab(name) {
   const [title, copy] = paneCopy[name] || paneCopy.connect;
@@ -287,3 +280,13 @@ function showTab(name) {
 for (const button of document.querySelectorAll('[data-tab]')) button.onclick = () => showTab(button.dataset.tab);
 api('session').then(data => { events = data.events; if (data.authenticated) { showDashboard(data.demo); refresh(); } else showLogin(); }).catch(error => toast(error.message, true));
 setInterval(refresh, 5000);
+
+function openRecipientDialog(){editorDirty=false;$('#recipient-dialog').showModal();$('#recipient-form').elements.name.focus();}
+async function closeRecipientDialog(){if(savingRecipient)return;if(editorDirty&&!await AppUI.confirm({title:'Descartar alterações?',message:'As alterações deste contato ainda não foram salvas.',confirmLabel:'Descartar',cancelLabel:'Continuar editando',danger:true}))return;resetForm();}
+$('#new-recipient').onclick=()=>{resetForm();$('#form-title').textContent='Inserir novo alerta';openRecipientDialog();};
+$('#close-recipient').onclick=closeRecipientDialog;
+$('#recipient-dialog').addEventListener('cancel',event=>{event.preventDefault();closeRecipientDialog();});
+$('#recipient-form').addEventListener('input',()=>{editorDirty=true;});
+$('#recipient-form').addEventListener('change',()=>{editorDirty=true;});
+$('#recipient-search').addEventListener('input',()=>renderRecipients(currentRecipients));
+$('#recipient-status').addEventListener('change',()=>renderRecipients(currentRecipients));
