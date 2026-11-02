@@ -40,6 +40,32 @@ async function fixture(mode){
 }
 
 for(const mode of ['sql','volume']){
+ test(`${mode}: recuperação automática respeita intervalo, reinício e autorização`,async()=>{
+  const f=await fixture(mode);try{
+   let h=f.factory();await h.message(f.message());const d=(await f.state()).draft;
+   f.setFailRecord(true);await h.vote(f.vote(d));assert.equal(f.records,1);
+   await h.recover();assert.equal(f.records,1);
+   f.advance(31000);await h.recover();assert.equal(f.records,2);
+   f.advance(61000);f.setFailRecord(false);h=f.factory();await h.recover();
+   assert.equal((await f.state()).draft.status,'saved');assert.equal(f.requests.at(-1).id,d.id);
+   await h.recover();assert.equal(f.records,3);
+  }finally{await f.close();}
+ });
+ test(`${mode}: erro definitivo interrompe recuperação e aparece no estado`,async()=>{
+  const f=await fixture(mode);try{
+   const h=f.factory({record:async()=>{throw new Error('purchase_expired');}});
+   await h.message(f.message());await h.vote(f.vote((await f.state()).draft));
+   const d=(await f.state()).draft;assert.equal(d.status,'blocked');assert.equal(d.last_error,'purchase_expired');assert.equal(d.next_attempt_at,null);
+   await h.recover();assert.equal((await f.state()).draft.attempts,1);
+  }finally{await f.close();}
+ });
+ test(`${mode}: recuperação não submete pedido com permissão revogada`,async()=>{
+  const f=await fixture(mode);try{
+   const h=f.factory();await h.message(f.message());f.setFailRecord(true);await h.vote(f.vote((await f.state()).draft));
+   await f.repo.saveRecipient({...f.recipient,enabled:false});f.advance(60000);f.setFailRecord(false);
+   await h.recover();assert.equal(f.records,1);assert.equal((await f.state()).draft.status,'submitting');
+  }finally{await f.close();}
+ });
  test(`${mode}: nova despesa reconcilia pedido submetido sem duplicar nem bloquear`,async()=>{
   const f=await fixture(mode);try{
    const h=f.factory();await h.message(f.message());const old=(await f.state()).draft;

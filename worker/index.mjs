@@ -223,9 +223,11 @@ async function run() {
   let cleanedAt = 0;
   let deletionsAt = 0;
   let waterReconcileAt = 0;
+  let purchaseReconcileAt = 0;
   while (!stopping) {
     if (Date.now() - cleanedAt > 3600000) { await repo.cleanup(); try{await agentChannel.cleanup();}catch{console.error('agent_channel_cleanup_failed');} cleanedAt = Date.now(); }
     if (ready) {
+      if(Date.now()-purchaseReconcileAt>30000){purchaseReconcileAt=Date.now();try{await purchases.recover();}catch{console.error('purchase_recovery_failed');}}
       agentChannel.refresh();
       if(Date.now()-deletionsAt>30000) {
         deletionsAt=Date.now();

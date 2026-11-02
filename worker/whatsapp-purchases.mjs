@@ -48,7 +48,7 @@ export async function recordWhatsAppPurchase(draft,{env=process.env,fetcher=fetc
  const config=purchaseConfig(env);if(!config)throw new Error('purchase_disabled');
  const body={action:'record',request_id:draft.id,sender_phone:draft.owner_phone,authorization_id:draft.authorization_id,authorization_version:draft.authorization_version,confirmed:true,date:draft.date,items:draft.items};
  const response=await fetcher(config.url,{method:'POST',headers:{Authorization:`Bearer ${config.token}`,'Content-Type':'application/json','User-Agent':'superapp-mensageria/1.0'},body:JSON.stringify(body),redirect:'error',signal:AbortSignal.timeout(20000)});
- if(!response.ok)throw new Error(response.status===409?'purchase_conflict':response.status===410?'purchase_expired':'purchase_record_unavailable');
+ if(!response.ok)throw new Error(response.status===409?'purchase_conflict':response.status===410?'purchase_expired':[401,403].includes(response.status)?'purchase_authorization_failed':response.status===400?'purchase_invalid':'purchase_record_unavailable');
  const result=await response.json(),total=draft.items.reduce((sum,item)=>sum+item.amount_cents,0);
  if(result?.ok!==true || result.status!=='saved' || result.request_id!==draft.id || typeof result.duplicate!=='boolean' || result.count!==draft.items.length || result.total_cents!==total || result.date!==draft.date)throw new Error('purchase_record_unverified');
  return result;
@@ -96,7 +96,7 @@ function createPurchaseSession({client,repo,worker,env=process.env,scope,authori
    }
   }catch(error){await change(state=>{if(state.draft?.id===id)state.draft={id,status:'failed',date:prepared.date,expires_at:prepared.expires_at};});throw error;}
  }
- async function confirm(draft,address) {
+ async function confirm(draft,address,notify=true) {
   if(!await authorize() || draft.authorization_id!==scope.id || draft.authorization_version!==scope.version)return;
   if(draft.status==='saved') {
    await outbound(address,`✅ Registro já confirmado no Super App.\n${draft.count} ${draft.count===1?'item':'itens'} — ${money(draft.total_cents)}\nDespesas variáveis · Débito/Pix.`);
@@ -106,8 +106,11 @@ function createPurchaseSession({client,repo,worker,env=process.env,scope,authori
   if(draft.status==='draft' && (draft.date!==brazilDate(new Date(now())) || Date.parse(draft.expires_at)<=now()))return;
   await change(state=>{if(state.draft?.id===draft.id)state.draft.status='submitting';});
   let result;
-  try {result=await record(draft,{env});}catch{
-   await outbound(address,'🦉 Não consegui confirmar se o Super App gravou. O pedido ficou protegido, sem alterar os itens. Confirme novamente respondendo à mesma prévia ou usando sua enquete; a repetição não duplica a compra.');
+  try {result=await record(draft,{env});}catch(error){
+   const code=['purchase_conflict','purchase_expired','purchase_authorization_failed','purchase_invalid'].includes(error?.message)?error.message:'purchase_record_unavailable';
+   await change(state=>{if(state.draft?.id===draft.id){const d=state.draft;d.last_attempt_at=new Date(now()).toISOString();d.attempts=(d.attempts||0)+1;d.last_error=code;d.next_attempt_at=new Date(now()+Math.min(900000,30000*2**Math.min(d.attempts-1,5))).toISOString();if(code!=='purchase_record_unavailable'){d.status='blocked';d.next_attempt_at=null;}}});
+   if(code!=='purchase_record_unavailable'){await outbound(address,'🦉 O pedido precisa de atenção no painel: '+(code==='purchase_expired'?'a data do pedido expirou.':code==='purchase_authorization_failed'?'a autorização da integração foi recusada.':code==='purchase_conflict'?'o identificador do pedido está em conflito.':'os dados do pedido foram recusados.')+' Confira o Super App antes de reenviar.');return;}
+   if(notify)await outbound(address,'🦉 Não consegui confirmar se o Super App gravou. O pedido ficou protegido, sem alterar os itens. Confirme novamente respondendo à mesma prévia ou usando sua enquete; a repetição não duplica a compra.');
    return;
   }
   await change(state=>{state.draft={id:draft.id,status:'saved',address:draft.address,owner_phone:draft.owner_phone,authorization_id:draft.authorization_id,authorization_version:draft.authorization_version,code:draft.code,revision:draft.revision,date:draft.date,expires_at:draft.expires_at,count:result.count,total_cents:result.total_cents,preview_ids:draft.preview_ids,poll_id:draft.poll_id,poll_choices:draft.poll_choices};});
@@ -143,6 +146,7 @@ function createPurchaseSession({client,repo,worker,env=process.env,scope,authori
    if(await repo.knownBotMessage(quoteId))return false; // water/diet/financial alerts are not purchase drafts.
   }
   const draft=snapshot.draft;
+  if(draft?.status==='blocked'){if(await reserve(id))await outbound(address,'🦉 Há um pedido que exige atenção no painel. Confira o Super App antes de reenviar ou limpar a pendência.');return true;}
   if(!quoteId && message.type==='chat' && /^(?:\/?pendente|ver compra pendente|mostrar compra pendente)$/.test(normalize(message.body))) {
    if(!await reserve(id))return true;
    if(draft?.status==='saved'){await confirm(draft,address);return true;}
@@ -250,7 +254,7 @@ function createPurchaseSession({client,repo,worker,env=process.env,scope,authori
    if(aliases?.has(address))await outbound(address,reply);
    return false;
   }
- }),vote:vote=>queue(()=>processVote(vote))};
+ }),vote:vote=>queue(()=>processVote(vote)),recover:()=>queue(async()=>{const s=await load(),d=s.draft;if(d?.status==='submitting' && (!d.next_attempt_at || Date.parse(d.next_attempt_at)<=now()))await confirm(d,d.address,false);})};
 }
 
 // Each authorized phone has its own durable draft, limits and confirmation IDs.
@@ -262,7 +266,9 @@ export function createWhatsAppPurchases(options) {
  async function route(kind,event) {
   if(!config)return false;
   let address,actor;
-  if(kind==='message') {
+  if(kind==='recover') {
+   address=event.address;actor=event.address;
+  }else if(kind==='message') {
    if(event.isForwarded || !['chat','audio','ptt'].includes(event.type))return false;
    address=serializedId(event.fromMe ? event.to : event.from);
    actor=event.fromMe ? serializedId(client.info?.wid) : serializedId(event.from);
@@ -276,6 +282,7 @@ export function createWhatsAppPurchases(options) {
   const recipient=interactionRecipient(await repo.recipients(),phone,'purchases.record');
   if(!recipient)return false;
   const scope={id:recipient.id,version:interactionVersion(recipient)};
+  if(kind==='recover' && (event.authorization_id!==scope.id || event.authorization_version!==scope.version))return false;
   const authorize=async()=>{
    const current=interactionRecipient(await repo.recipients(),phone,'purchases.record');
    return Boolean(current && current.id===scope.id && interactionVersion(current)===scope.version);
@@ -312,5 +319,8 @@ export function createWhatsAppPurchases(options) {
   const task=tail.then(()=>route(kind,event)).catch(()=>{console.error('purchase_processing_failed');return false;});
   tail=task.finally(()=>queued--);return task;
  }
- return {message:event=>enqueue('message',event),vote:event=>enqueue('vote',event)};
+ return {message:event=>enqueue('message',event),vote:event=>enqueue('vote',event),recover:async()=>{
+  const root=await repo.purchaseState();
+  for(const state of Object.values(root.sessions||{}))if(state.draft?.status==='submitting')await enqueue('recover',state.draft);
+ }};
 }

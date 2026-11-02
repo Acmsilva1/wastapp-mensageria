@@ -171,6 +171,8 @@ function editRecipient(r) {
 }
 function resetForm() { $('#recipient-dialog').close(); editorDirty=false; const form = $('#recipient-form'); editingRecipient = null; formGeneration++; form.reset(); form.elements.phone.readOnly = false; form.elements.audience.readOnly = false; $('#form-title').textContent = 'Adicionar destinatário'; $('#recipient-mode-label').textContent = 'Número ou grupo'; $('#group-status').textContent = ''; $('#cancel-edit').hidden = false; updateTargetFields(); }
 function render(data) {
+  const reasons={purchase_record_unavailable:'Super App indisponível; nova tentativa automática',purchase_conflict:'Conflito no pedido; confira o Super App',purchase_expired:'Data expirada; confira o Super App antes de reenviar',purchase_authorization_failed:'Autorização recusada; revise a integração',purchase_invalid:'Dados recusados; confira o pedido'};
+  $('#purchase-pending').replaceChildren(...(data.purchase_pending||[]).map(d=>element('p',`Pedido ${d.code||'pendente'}: ${reasons[d.last_error]||'Consultando confirmação'}. Tentativas: ${d.attempts}. Última: ${d.last_attempt_at?new Date(d.last_attempt_at).toLocaleString('pt-BR'):'aguardando'}. ${d.next_attempt_at?'Próxima: '+new Date(d.next_attempt_at).toLocaleString('pt-BR'):'Requer atenção no Super App.'}`)));
   events = data.events;
   const s = data.state;
   $('#pairing-reset').disabled = Boolean(data.demo || s.pairing_pending);
