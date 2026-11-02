@@ -411,6 +411,18 @@ test('painel local le o volume sem DATABASE_URL e o QR nao fica depois de conect
     await repo.saveRecipient(recipient());
     const queued = await fetch(base + 'event', { method: 'POST', headers: { ...headers, Authorization: `Bearer ${env.INTEGRATION_TOKEN}` }, body: JSON.stringify(alert({ idempotency_key: 'painel' })) });
     assert.equal(queued.status, 202);
+    const resetUrl = base + 'safety-reset';
+    const postReset = (extra = {}, body = { confirm: 'reset_worker_and_queue' }) => fetch(resetUrl, { method: 'POST', headers: { ...headers, Cookie: cookie, ...extra }, body: JSON.stringify(body) });
+    assert.equal((await postReset({}, {})).status, 400);
+    assert.equal((await postReset({ Origin: 'https://evil.example' })).status, 403);
+    const safetyReset = await postReset();
+    assert.equal(safetyReset.status, 202);
+    assert.deepEqual((await safetyReset.json()).discarded, { pending: 1, in_flight: 0, purchase_drafts: 0 });
+    assert.equal((await (await fetch(base + 'snapshot', { headers: { Cookie: cookie } })).json()).safety_reset_pending, true);
+    const request = await repo.pendingSafetyReset(worker);
+    assert.ok(request);
+    await repo.completeSafetyReset(worker, request);
+    assert.equal((await repo.snapshot()).safety_reset_pending, false);
     assert.equal((await repo.requestPairingReset()) === (await repo.requestPairingReset()), true);
   } finally {
     await new Promise(resolve => server.close(resolve));
@@ -421,6 +433,10 @@ test('painel local le o volume sem DATABASE_URL e o QR nao fica depois de conect
 test('worker e Dockerfile conservam o volume fora de logout e de versao nova', async () => {
   const worker = await readFile(new URL('../worker/index.mjs', import.meta.url), 'utf8');
   const docker = await readFile(new URL('../Dockerfile.whatsapp', import.meta.url), 'utf8');
+  const panel = await readFile(new URL('../public/index.html', import.meta.url), 'utf8');
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const ui = await readFile(new URL('../public/ui.js', import.meta.url), 'utf8');
+  const uiCss = await readFile(new URL('../public/ui.css', import.meta.url), 'utf8');
   assert.match(worker, /new VolumeAuth\(/);
   assert.match(worker, /applySessionFingerprint/);
   assert.match(worker, /if \(wipe\) await removeSessionArtifacts\(dataPath\)/);
@@ -428,6 +444,46 @@ test('worker e Dockerfile conservam o volume fora de logout e de versao nova', a
   assert.doesNotMatch(worker, /RemoteAuth/);
   assert.doesNotMatch(worker, /client\.logout\(/);
   assert.match(worker, /process\.on\('SIGTERM', \(\) => close\(\)\.then\(\(\) => process\.exit\(0\)\)\)/);
+  assert.match(worker, /pendingSafetyReset\(worker\)/);
+  assert.match(worker, /completeSafetyReset\(worker, startupSafetyReset\)/);
+  assert.match(panel, /id="safety-reset"/);
+  assert.match(app, /reset_worker_and_queue/);
+  assert.doesNotMatch(panel, /data-theme-toggle|Tema escuro/);
+  assert.doesNotMatch(ui, /localStorage|theme==='dark'|data-theme-toggle/);
+  assert.doesNotMatch(uiCss, /data-theme=dark/);
   assert.match(docker, /VOLUME \["\/app\/\.runtime\/whatsapp"\]/);
   assert.doesNotMatch(docker, /rm\s+-rf[^\n]*\.runtime\/whatsapp/);
+});
+
+test('reset de seguranca no volume preserva dados e impede reenvio da fila descartada', async () => {
+  const root = await tempVolume();
+  try {
+    const repo = await VolumeRepository.open(root);
+    await repo.saveRecipient(recipient());
+    await repo.enqueue(alert({ idempotency_key: 'volume:safety:pending' }));
+    await repo.enqueue(alert({ idempotency_key: 'volume:safety:sending' }));
+    const worker = randomUUID();
+    await repo.lease(worker);
+    await repo.claim(worker);
+    await repo.mutate(data => { data.purchases = { sessions: { pending: { processed: [{ id: 'keep', at: 1 }], draft: { id: 'draft-pending', status: 'draft', items: [{ description: 'Café', amount_cents: 1000 }], date: '2026-11-02', expires_at: '2026-11-02T23:59:00.000Z' } }, saved: { draft: { id: 'draft-saved', status: 'saved', total_cents: 2000 } } } }; });
+    const first = await repo.requestSafetyReset();
+    assert.deepEqual({ cancelled: first.cancelled, uncertain: first.uncertain, purchaseDrafts: first.purchaseDrafts }, { cancelled: 1, uncertain: 1, purchaseDrafts: 1 });
+    const repeated = await repo.requestSafetyReset();
+    assert.equal(repeated.request, first.request);
+    assert.deepEqual({ cancelled: repeated.cancelled, uncertain: repeated.uncertain, purchaseDrafts: repeated.purchaseDrafts }, { cancelled: 0, uncertain: 0, purchaseDrafts: 0 });
+    assert.equal(await repo.pendingSafetyReset(worker), first.request);
+    await assert.rejects(repo.completeSafetyReset(randomUUID(), first.request), /worker_lease_lost/);
+    await repo.completeSafetyReset(worker, first.request);
+    assert.equal(await repo.pendingSafetyReset(worker), null);
+    const data = await repo.read();
+    assert.deepEqual(data.deliveries.map(row => [row.status, row.error_code]).sort(), [['cancelled', 'safety_reset'], ['uncertain', 'safety_reset_in_flight']]);
+    assert.ok(data.deliveries.every(row => row.message === null && row.title === null));
+    assert.equal(data.recipients.length, 1);
+    assert.equal(data.purchases.sessions.pending.draft.status, 'cancelled');
+    assert.equal(data.purchases.sessions.pending.draft.previous_status, 'draft');
+    assert.equal(data.purchases.sessions.pending.draft.items, undefined);
+    assert.deepEqual(data.purchases.sessions.pending.processed, [{ id: 'keep', at: 1 }]);
+    assert.equal(data.purchases.sessions.saved.draft.status, 'saved');
+    assert.equal((await repo.snapshot()).safety_reset_pending, false);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });

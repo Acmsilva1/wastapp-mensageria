@@ -2,7 +2,7 @@
 <html lang="pt-BR" data-theme="light">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>Mensageria · WhatsApp</title><link rel="stylesheet" href="/styles.css"><script src="/ui.js" defer></script><script src="/app.js" defer></script><meta name="theme-color" content="#14634f"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="Mensageria"><link rel="manifest" href="/manifest.webmanifest"><link rel="icon" href="/icons/icon-192.png"><link rel="apple-touch-icon" href="/icons/icon-180.png"><link rel="stylesheet" href="/pwa.css"><script src="/pwa.js" defer></script><link rel="stylesheet" href="/ui.css"><link rel="stylesheet" href="/visual.css"></head>
 <body class="messenger-app">
-<header class="top"><div class="brand"><img class="brand-icon" src="/icons/icon-192.png" width="38" height="38" alt=""><div>Mensageria<small>SEU CENTRO DE NOTIFICAÇÕES</small></div></div><div class="top-actions"><button class="quiet ui-theme-toggle" type="button" data-theme-toggle>☾ Tema escuro</button><button id="install-app" class="quiet" type="button" hidden>Instalar app</button><span id="environment" class="pill">WhatsApp</span><button id="logout" class="quiet" hidden>Sair</button></div></header>
+<header class="top"><div class="brand"><img class="brand-icon" src="/icons/icon-192.png" width="38" height="38" alt=""><div>Mensageria<small>SEU CENTRO DE NOTIFICAÇÕES</small></div></div><div class="top-actions"><button id="install-app" class="quiet" type="button" hidden>Instalar app</button><span id="environment" class="pill">WhatsApp</span><button id="logout" class="quiet" hidden>Sair</button></div></header>
 <main>
 <section id="login" class="login card"><span class="eyebrow">ACESSO RESTRITO</span><h1>Suas notificações,<br>em um só lugar.</h1><p>Entre para gerenciar a conexão do WhatsApp e escolher quem recebe cada alerta.</p><form id="login-form"><label>Chave de administração<input type="password" name="token" autocomplete="current-password" required minlength="32"></label><button class="primary">Entrar no painel</button></form><p class="muted">A chave é definida nas variáveis de ambiente do projeto. Ela não é o código recebido pelo WhatsApp.</p></section>
 <div id="dashboard" class="app" hidden>
@@ -25,6 +25,7 @@
 <p id="qr-help" class="muted" hidden>No celular: <strong>WhatsApp → Aparelhos conectados → Conectar aparelho</strong>. Não compartilhe este QR Code.</p>
 <button id="pairing-reset" class="quiet" type="button">Gerar novo QR</button>
 <p id="pairing-reset-help" class="muted">Reinicia o pareamento para conectar ou trocar o número remetente. Seus destinatários e histórico são mantidos.</p>
+<div class="safety-reset"><div><strong>Reset de segurança</strong><p class="muted">Reinicia somente o worker e descarta envios e confirmações de compra pendentes. A sessão do WhatsApp, contatos, permissões e histórico são preservados.</p></div><button id="safety-reset" class="quiet danger-button" type="button">Reiniciar e limpar pendências</button></div>
 <div class="connection-footer"><span id="backup-status">Sessão ainda sem backup remoto</span><span>Atualização automática</span></div>
 </section>
 <section data-pane="logs" class="logs-pane" hidden>

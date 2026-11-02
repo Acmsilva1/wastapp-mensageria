@@ -215,7 +215,34 @@ test('falha ao limpar sessao mantem pedido pendente para proxima inicializacao',
   assert.equal(qrRenewalStalled(0, 99999999), false); // autenticado/conectado nao reinicia
 });
 
+test('reset de seguranca descarta fila sem apagar sessao, destinatarios ou historico', async () => {
+  await reset();
+  await repo.saveRecipient(recipient());
+  await repo.enqueue(alert({ idempotency_key: 'safety:pending' }));
+  await repo.enqueue(alert({ idempotency_key: 'safety:sending' }));
+  const worker = randomUUID();
+  await repo.lease(worker);
+  await repo.claim(worker);
+  await db.query("insert into mensageria.session_backups(name,encrypted_archive) values('RemoteAuth-mensageria',$1)", [Buffer.from('backup-ficticio')]);
+  const first = await repo.requestSafetyReset();
+  assert.deepEqual({ cancelled: first.cancelled, uncertain: first.uncertain, purchaseDrafts: first.purchaseDrafts }, { cancelled: 1, uncertain: 1, purchaseDrafts: 0 });
+  const repeated = await repo.requestSafetyReset();
+  assert.equal(repeated.request, first.request);
+  assert.deepEqual({ cancelled: repeated.cancelled, uncertain: repeated.uncertain, purchaseDrafts: repeated.purchaseDrafts }, { cancelled: 0, uncertain: 0, purchaseDrafts: 0 });
+  assert.equal(await repo.pendingSafetyReset(worker), first.request);
+  await assert.rejects(repo.completeSafetyReset(randomUUID(), first.request), /worker_lease_lost/);
+  await repo.completeSafetyReset(worker, first.request);
+  assert.equal(await repo.pendingSafetyReset(worker), null);
+  const rows = (await db.query('select status,error_code,message from mensageria.deliveries order by status')).rows;
+  assert.deepEqual(rows.map(row => [row.status, row.error_code]), [['cancelled', 'safety_reset'], ['uncertain', 'safety_reset_in_flight']]);
+  assert.ok(rows.every(row => row.message === null));
+  assert.equal((await repo.recipients()).length, 1);
+  assert.equal((await db.query("select count(*)::int as count from mensageria.session_backups where name='RemoteAuth-mensageria'")).rows[0].count, 1);
+  assert.equal((await db.query("select count(*)::int as count from mensageria.connection_logs where event='safety_reset_completed' and code=$1", [first.request])).rows[0].count, 1);
+});
+
 test('migration e rollback funcionam e RLS esta habilitada em todas as tabelas', async () => {
+  await reset();
   const rows = (await db.query("select relname,relrowsecurity from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='mensageria' and relkind='r'")).rows;
   assert.equal(rows.length, 8); assert.ok(rows.every(r => r.relrowsecurity));
   const resetUp = await readFile(new URL('../migrations/002_pairing_reset.sql', import.meta.url), 'utf8');

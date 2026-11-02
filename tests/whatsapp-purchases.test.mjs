@@ -267,6 +267,24 @@ for(const mode of ['sql','volume'])test(`${mode}: mensagem independente encerra 
  }finally{await f.close();}
 });
 
+for(const mode of ['sql','volume'])test(`${mode}: reset de segurança cancela confirmação pendente e preserva compra salva`,async()=>{
+ const pending=await fixture(mode);try{
+  const handler=pending.factory();await handler.message(pending.message());
+  assert.equal((await pending.state()).draft.status,'draft');
+  const result=await pending.repo.requestSafetyReset();
+  assert.equal(result.purchaseDrafts,1);
+  await assert.rejects(pending.repo.changePurchaseState(pending.worker,()=>{}),/safety_reset_pending/);
+  const discarded=(await pending.state()).draft;
+  assert.equal(discarded.status,'cancelled');assert.equal(discarded.previous_status,'draft');assert.equal(discarded.items,undefined);
+ }finally{await pending.close();}
+ const saved=await fixture(mode);try{
+  const handler=saved.factory();await handler.message(saved.message());const draft=(await saved.state()).draft;await handler.vote(saved.vote(draft));
+  assert.equal((await saved.state()).draft.status,'saved');
+  const result=await saved.repo.requestSafetyReset();
+  assert.equal(result.purchaseDrafts,0);assert.equal((await saved.state()).draft.status,'saved');
+ }finally{await saved.close();}
+});
+
 test('pedido com resultado incerto conserva UUID e itens ao chegar nova mensagem e voto Não',async()=>{
  const f=await fixture('volume');try{
   const h=f.factory();await h.message(f.message());const old=(await f.state()).draft;

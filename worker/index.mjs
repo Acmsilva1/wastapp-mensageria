@@ -118,6 +118,8 @@ async function deliver(job) {
 async function run() {
   while (!stopping && !await repo.lease(worker)) await sleep(10000, undefined, { signal: abort.signal });
   if (stopping) return;
+  const startupSafetyReset = await repo.pendingSafetyReset(worker);
+  if (startupSafetyReset) await repo.completeSafetyReset(worker, startupSafetyReset);
   await repo.state(worker, 'connecting');
   await repo.log(worker, 'worker_started');
   if (await applySessionFingerprint(dataPath, await sessionFingerprint())) await repo.forgetPairedAccount();
@@ -135,6 +137,12 @@ async function run() {
     if (stopping || checkingPairing) return;
     checkingPairing = true;
     try {
+      const safetyReset = await repo.pendingSafetyReset(worker);
+      if (safetyReset) {
+        ready = false;
+        await close('safety_reset_requested');
+        process.exit(1);
+      }
       if (await repo.pendingPairingReset(worker) || qrRenewalStalled(lastQRAt)) {
         ready = false;
         await close('pairing_reset_requested');

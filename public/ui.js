@@ -1,11 +1,8 @@
 // Padrão visual compartilhado com o tema banco do Super App.
 (() => {
   const node=(tag,text,cls)=>{const element=document.createElement(tag);if(text!==undefined)element.textContent=text;if(cls)element.className=cls;return element;};
-  const storageKey='superapp-ui-theme';
-  function applyTheme(theme){document.documentElement.dataset.theme=theme;document.querySelector('meta[name="theme-color"]')?.setAttribute('content',theme==='dark'?'#171a1f':'#ffffff');document.querySelectorAll('[data-theme-toggle]').forEach(button=>{button.textContent=theme==='dark'?'☀ Tema claro':'☾ Tema escuro';button.setAttribute('aria-label',theme==='dark'?'Usar tema claro':'Usar tema escuro');});}
-  let saved;try{saved=localStorage.getItem(storageKey);}catch{}
-  applyTheme(saved==='dark'?'dark':'light');
-  document.addEventListener('click',event=>{if(!event.target.closest('[data-theme-toggle]'))return;const next=document.documentElement.dataset.theme==='dark'?'light':'dark';applyTheme(next);try{localStorage.setItem(storageKey,next);}catch{}});
+  document.documentElement.dataset.theme='light';
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content','#ffffff');
   let confirmation=null;
   function confirm({title='Confirmar ação',message='',confirmLabel='Confirmar',cancelLabel='Cancelar',danger=false}={}){
     if(confirmation)return Promise.resolve(false);
@@ -29,5 +26,5 @@
     close.type='button';close.setAttribute('aria-label','Fechar mensagem');content.append(node('strong',title),node('p',message));box.append(icon,content,close);document.body.append(box);
     let timer=setTimeout(()=>box.remove(),error?9000:5000);close.onclick=()=>{clearTimeout(timer);box.remove();};box.onmouseenter=()=>clearTimeout(timer);box.onmouseleave=()=>{timer=setTimeout(()=>box.remove(),3000);};
   }
-  window.AppUI={confirm,toast,applyTheme,closeConfirmation:()=>confirmation?.()};
+  window.AppUI={confirm,toast,closeConfirmation:()=>confirmation?.()};
 })();

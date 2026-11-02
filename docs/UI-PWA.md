@@ -1,6 +1,6 @@
 # Padrão visual e atualização PWA
 
-Mensageria e Central usam os tokens do Super App (styles/bank-theme.css): fundo cinza, superfícies claras, destaque vermelho, tipografia nativa e cores semânticas. public/ui.css e public/ui.js padronizam tema claro/escuro, confirmações e feedback. public/visual.css adapta cada aplicação.
+Mensageria e Central usam os tokens do Super App (styles/bank-theme.css): fundo cinza, superfícies claras, destaque vermelho, tipografia nativa e cores semânticas. A Mensageria usa somente o tema claro; public/ui.css e public/ui.js padronizam confirmações e feedback. public/visual.css adapta cada aplicação.
 
 A Mensageria tem busca/filtro de contatos, criação/edição em modal e exclusão lógica. Excluir desativa o contato e cancela envios pendentes, preservando histórico. Recriar o mesmo destino/perfil restaura o cadastro. Destino e perfil são mantidos durante edição. Em PostgreSQL, aplicar migrations/008_recipient_archive.sql antes de usar exclusão; o ambiente VPS atual usa volume JSON.
 

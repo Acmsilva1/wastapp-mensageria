@@ -20,6 +20,7 @@ const messages = {
   database_configuration_invalid: 'DATABASE_URL não foi configurada ou tem formato inválido.',
   encryption_key_invalid: 'SESSION_ENCRYPTION_KEY deve ter exatamente 64 caracteres hexadecimais.',
   demo_no_pairing: 'O pareamento real não está disponível na demonstração.', pairing_confirmation_required: 'Confirme o reinício do pareamento.',
+  demo_no_safety_reset: 'O reset real não está disponível na demonstração.', safety_reset_confirmation_required: 'Confirme o reset de segurança.',
   invalid_credentials: 'Chave de administração incorreta.', authentication_required: 'Entre novamente no painel.',
   configuration_required: 'Configure as variáveis de ambiente e o banco antes de entrar.', service_unavailable: 'Serviço indisponível. Confira a conexão com o banco e as migrations.',
   login_rate_limited: 'Muitas tentativas. Aguarde dez minutos.', invalid_input: 'Confira os campos e selecione ao menos um alerta ou uma permissão.',
@@ -43,8 +44,8 @@ const messages = {
 };
 const stateLabels = { restarting: 'Preparando novo QR', offline: 'Serviço offline', connecting: 'Conectando', qr: 'Escaneie o QR', authenticated: 'Finalizando conexão', connected: 'Conectado' };
 const deliveryLabels = { pending: 'Na fila', sending: 'Enviando', sent: 'Enviado', failed: 'Falhou', uncertain: 'Sem confirmação', cancelled: 'Cancelado' };
-const deliveryErrorLabels = { group_lookup_timeout: 'A consulta ao grupo excedeu o tempo limite antes do envio.', group_unavailable: 'Grupo indisponível: confira se a conta ainda participa dele.', group_read_only: 'Sem permissão para enviar nesse grupo.', recipient_unavailable: 'Destinatário indisponível.', recipient_not_registered: 'Número não encontrado no WhatsApp.', send_failed: 'Não foi possível concluir o envio.', send_timeout: 'O envio excedeu o tempo limite; confira a conversa antes de reenviar.' };
-const logLabels = { group_catalog_failed: 'Não foi possível atualizar a lista de grupos da conta conectada', pairing_reset_completed: 'Sessão anterior removida; aguardando novo QR', worker_started: 'Serviço iniciado', worker_stopped: 'Serviço encerrado', qr_issued: 'QR Code renovado', authenticated: 'Pareamento aceito', connected: 'WhatsApp conectado', session_saved: 'Backup da sessão salvo', auth_failure: 'Falha na autenticação', disconnected: 'WhatsApp desconectado' };
+const deliveryErrorLabels = { group_lookup_timeout: 'A consulta ao grupo excedeu o tempo limite antes do envio.', group_unavailable: 'Grupo indisponível: confira se a conta ainda participa dele.', group_read_only: 'Sem permissão para enviar nesse grupo.', recipient_unavailable: 'Destinatário indisponível.', recipient_not_registered: 'Número não encontrado no WhatsApp.', send_failed: 'Não foi possível concluir o envio.', send_timeout: 'O envio excedeu o tempo limite; confira a conversa antes de reenviar.', safety_reset: 'Descartado pelo reset de segurança antes do envio.', safety_reset_in_flight: 'O reset ocorreu durante o envio; confira a conversa antes de reenviar.' };
+const logLabels = { group_catalog_failed: 'Não foi possível atualizar a lista de grupos da conta conectada', pairing_reset_completed: 'Sessão anterior removida; aguardando novo QR', safety_reset_requested: 'Reset de segurança solicitado', safety_reset_completed: 'Fila descartada; reinício do worker autorizado', worker_started: 'Serviço iniciado', worker_stopped: 'Serviço encerrado', qr_issued: 'QR Code renovado', authenticated: 'Pareamento aceito', connected: 'WhatsApp conectado', session_saved: 'Backup da sessão salvo', auth_failure: 'Falha na autenticação', disconnected: 'WhatsApp desconectado' };
 let currentRecipients = [];
 let groupCatalog = [];
 let groupsLoading = false;
@@ -174,6 +175,8 @@ function render(data) {
   const s = data.state;
   $('#pairing-reset').disabled = Boolean(data.demo || s.pairing_pending);
   $('#pairing-reset').textContent = s.pairing_pending ? 'Aguardando novo QR…' : 'Gerar novo QR';
+  $('#safety-reset').disabled = Boolean(data.demo || data.safety_reset_pending);
+  $('#safety-reset').textContent = data.safety_reset_pending ? 'Reiniciando worker…' : 'Reiniciar e limpar pendências';
   $('#connection-status').textContent = stateLabels[s.status] || s.status;
   $('#connection-status').className = `pill ${s.status === 'connected' ? 'ok' : s.status === 'offline' ? 'off' : 'warn'}`;
   $('#account-phone').textContent = s.account_phone || 'Nenhum número conectado'; $('#account-name').textContent = s.account_name || 'Aguardando pareamento';
@@ -245,6 +248,17 @@ $('#pairing-reset').onclick = async () => {
     await api('pairing-reset', { confirm: 'reset_pairing' });
     $('#qr').hidden = true; $('#qr').removeAttribute('src');
     toast('Novo pareamento solicitado. Aguarde o worker reiniciar e o QR aparecer nesta página.');
+    await refresh();
+  } catch (error) { toast(error.message, true); button.disabled = false; }
+};
+$('#safety-reset').onclick = async () => {
+  if(!await AppUI.confirm({title:'Executar reset de segurança?',message:'O worker será reiniciado. Envios e confirmações de compra pendentes serão cancelados; um envio em andamento ficará como “sem confirmação”. Se uma compra estava sendo gravada, confira o Super App antes de lançá-la novamente. Sessão do WhatsApp, contatos, permissões e histórico serão mantidos.',confirmLabel:'Reiniciar e limpar',danger:true}))return;
+  const button = $('#safety-reset'); button.disabled = true;
+  try {
+    const result = await api('safety-reset', { confirm: 'reset_worker_and_queue' });
+    const deliveries = Number(result.discarded?.pending || 0) + Number(result.discarded?.in_flight || 0);
+    const purchases = Number(result.discarded?.purchase_drafts || 0);
+    toast(deliveries || purchases ? `Reset solicitado. ${deliveries} envio(s) e ${purchases} confirmação(ões) de compra descartados.` : 'Reset solicitado. Não havia pendências armazenadas.');
     await refresh();
   } catch (error) { toast(error.message, true); button.disabled = false; }
 };
