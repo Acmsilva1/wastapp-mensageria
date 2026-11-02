@@ -191,7 +191,14 @@ function createPurchaseSession({client,repo,worker,env=process.env,scope,authori
    const intent=purchaseTextIntent(text,draft.code);
    if(intent!=='edit') {if(!await reserve(id))return true;if(intent==='cancel')await cancel(draft,address);else if(draft.preview_ids?.includes(quoteId))await confirm(draft,address);return true;}
   }
-  if(draft?.status==='submitting') {if(await reserve(id))await outbound(address,'🦉 Aguardo a confirmação deste pedido no Super App. Repita a confirmação na mesma prévia; por segurança não altero seus itens agora.');return true;}
+  if(draft?.status==='submitting') {
+   if(linked){if(await reserve(id))await outbound(address,'🦉 Este pedido aguarda confirmação. Responda “confirmo” à prévia para consultar o resultado.');return true;}
+   // Reconcile the already confirmed request with the same UUID before accepting
+   // another expense. The callback is idempotent, including a lost receipt.
+   await confirm(draft,address);
+   const recovered=await load();
+   if(recovered.draft?.id!==draft.id || recovered.draft.status!=='saved' || linked)return true;
+  }
   if(audio)validateAudioMetadata(message); // Scope and metadata precede download and AI calls.
   if(!await reserve(id,audio?2:1))return true;
   if(audio) {

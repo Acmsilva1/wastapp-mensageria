@@ -40,6 +40,17 @@ async function fixture(mode){
 }
 
 for(const mode of ['sql','volume']){
+ test(`${mode}: nova despesa reconcilia pedido submetido sem duplicar nem bloquear`,async()=>{
+  const f=await fixture(mode);try{
+   const h=f.factory();await h.message(f.message());const old=(await f.state()).draft;
+   f.setFailRecord(true);await h.vote(f.vote(old));
+   f.setFailRecord(false);await h.message(f.message('Gastei 20 reais no mercado'));
+   assert.equal(f.requests.at(-1).id,old.id);
+   assert.deepEqual(f.requests.at(-1).items,old.items);
+   const next=(await f.state()).draft;
+   assert.equal(next.status,'draft');assert.notEqual(next.id,old.id);
+  }finally{await f.close();}
+ });
  test(`${mode}: rascunho não grava; dono/grupo/eco/água isolados; confirmação idempotente após reiniciar`,async()=>{
   const f=await fixture(mode);try{
    let h=f.factory();
