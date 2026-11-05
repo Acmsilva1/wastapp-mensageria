@@ -10,6 +10,83 @@ export const PURCHASE_SCHEMA={type:'object',additionalProperties:false,required:
  date:{type:['string','null']},items:{type:'array',items:itemSchema}
 }};
 const normalize=value=>String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+const PURCHASE_WORDS=/\b(?:pix|debito|credito|gast(?:ei|o|ou|amos)|pagu(?:ei|ou)|comprei|compra|cust(?:ou|aram)|desembols(?:ei|o)|despesa|registr|anot|reais?|r\$)\b/i;
+const NUMBER_WORDS={zero:0,um:1,uma:1,dois:2,duas:2,tres:3,quatro:4,cinco:5,seis:6,sete:7,oito:8,nove:9,dez:10,onze:11,doze:12,treze:13,catorze:14,quatorze:14,quinze:15,dezesseis:16,dezessete:17,dezoito:18,dezenove:19,vinte:20,trinta:30,quarenta:40,cinquenta:50,sessenta:60,setenta:70,oitenta:80,noventa:90,cem:100,cento:100,duzentos:200,trezentos:300,quatrocentos:400,quinhentos:500,seiscentos:600,setecentos:700,oitocentos:800,novecentos:900};
+const NUMBER_PATTERN=Object.keys(NUMBER_WORDS).sort((a,b)=>b.length-a.length).join('|');
+const MONEY_DIGITS=/(?:r\$\s*)?(\d{1,3}(?:\.\d{3})*(?:,\d{1,2})|\d+(?:[.,]\d{1,2})?)(?:\s*(?:reais?|rs))?/i;
+
+function titleCase(value) {
+ const text=String(value || '').replace(/\s+/g,' ').trim();
+ return text?text[0].toLocaleUpperCase('pt-BR')+text.slice(1):null;
+}
+function numericCents(value) {
+ let text=String(value || '').trim();
+ if(!text)return null;
+ if(text.includes(','))text=text.replace(/\./g,'').replace(',','.');
+ else if(/^\d{1,3}(?:\.\d{3})+$/.test(text))text=text.replace(/\./g,'');
+ const amount=Number(text);
+ return Number.isFinite(amount)&&amount>0?Math.round(amount*100):null;
+}
+function wordsNumber(value) {
+ const tokens=normalize(value).split(/\s+/).filter(token=>token&&token!=='e');
+ if(!tokens.length)return null;
+ let total=0,current=0;
+ for(const token of tokens) {
+  if(token==='mil'){total+=(current || 1)*1000;current=0;continue;}
+  if(!Object.hasOwn(NUMBER_WORDS,token))return null;
+  current+=NUMBER_WORDS[token];
+ }
+ return total+current;
+}
+function wordMoney(text) {
+ const match=normalize(text).match(new RegExp(`\\b((?:(?:${NUMBER_PATTERN})|e)(?:\\s+(?:(?:${NUMBER_PATTERN})|e))*)\\s+reais?(?:\\s+e\\s+((?:(?:${NUMBER_PATTERN})|e)(?:\\s+(?:(?:${NUMBER_PATTERN})|e))*)\\s+centavos?)?\\b`,'i'));
+ if(!match)return null;
+ const reais=wordsNumber(match[1]),centavos=match[2]?wordsNumber(match[2]):0;
+ if(!Number.isInteger(reais)||!Number.isInteger(centavos)||centavos<0||centavos>99)return null;
+ return {amount_cents:reais*100+centavos,raw:match[0]};
+}
+function moneyIn(text) {
+ const match=String(text || '').match(MONEY_DIGITS);
+ if(match){const amount_cents=numericCents(match[1]);if(amount_cents)return {amount_cents,raw:match[0]};}
+ return wordMoney(text);
+}
+function descriptionIn(text,money) {
+ let value=normalize(text);
+ if(money?.raw)value=value.replace(normalize(money.raw),' ');
+ value=value
+  .replace(/\b(?:eu|hoje|agora|na verdade|verdade|foram|continua|gastei|gasto|gastou|gastamos|paguei|pagou|comprei|compra|custou|custaram|desembolsei|desembolso|anota|anote|registre|registrar|despesa|valor|total|foi|ficou|deu)\b/g,' ')
+  .replace(/\b(?:no|na|nos|nas|em|com|por|pelo|pela|via)\s+(?:pix|debito)\b/g,' ')
+  .replace(/\b(?:pix|debito|reais?|rs)\b/g,' ')
+  .replace(/[^\p{L}\d -]+/gu,' ').replace(/\s+/g,' ').trim()
+  .replace(/^(?:no|na|nos|nas|em|com|por|pelo|pela|de|do|da)\s+/,'');
+ return titleCase(value.slice(0,120));
+}
+function localSegments(text) {
+ const parts=String(text || '').split(/\s*;\s*|\s+e\s+(?=[^;\n]*\d)/i).filter(Boolean);
+ return parts.length>20?parts.slice(0,20):parts;
+}
+export function extractPurchasesLocal(text,context=null,{now=new Date()}={}) {
+ if(typeof text!=='string'||!text.trim()||text.length>4000)throw new Error('purchase_input_limit');
+ const today=brazilDate(now),plain=normalize(text),unsupported=unsupportedPurchase(text);
+ if(unsupported)return {status:'reject',reason:unsupported,date:today,items:[]};
+ if(/\b(?:cancelar|cancele|cancela|desisto|desistir|esquece|esqueca)\b/.test(plain))return {status:'cancel',reason:'none',date:today,items:[]};
+ const previous=Array.isArray(context?.items)?context.items:[];
+ if(!previous.length&&!PURCHASE_WORDS.test(plain)&&!MONEY_DIGITS.test(plain))return {status:'ignore',reason:'not_purchase',date:today,items:[]};
+ if(/\b(?:e poucos|mais ou menos|cerca de|por volta de)\b/.test(plain))return {status:'clarify',reason:'ambiguous_amount',date:today,items:previous.map(item=>({...item,amount_cents:null,payment:'debito_pix'}))};
+ const segments=localSegments(text),parsed=[];
+ for(const segment of segments) {
+  const money=moneyIn(segment);if(!money)continue;
+  let description=descriptionIn(segment,money);
+  if(!description&&previous.length===1)description=previous[0].description;
+  parsed.push({description:description || null,amount_cents:money.amount_cents,payment:'debito_pix'});
+ }
+ if(!parsed.length) {
+  const description=descriptionIn(text,null) || (previous.length===1?previous[0].description:null);
+  return validatePurchaseExtraction({status:'clarify',reason:'missing_amount',date:today,items:[{description,amount_cents:null,payment:'debito_pix'}]},today);
+ }
+ if(previous.length>1&&parsed.length===1&&!descriptionIn(text,moneyIn(text)))return {status:'clarify',reason:'ambiguous_amount',date:today,items:previous.map(item=>({...item,payment:'debito_pix'}))};
+ return validatePurchaseExtraction({status:'ready',reason:'none',date:today,items:parsed},today);
+}
 export function unsupportedPurchase(text) {
  const source=normalize(text).replace(/\bnao\s+(?:(?:foi|e|era)\s+)?(?:no\s+)?(?:credito|parcelad[oa])\b/g,'');
  if(/\bcredito\b|\bparcel(?:ado|ada|as|amento)\b|\bem\s+\d+\s*(?:x|vezes)\b|\b\d+\s*x\b/.test(source))return 'credit_or_installments';
@@ -69,6 +146,16 @@ status ready somente com1..20 itens completos e inequívocos, reason none. statu
   }
  }
  return validated;
+}
+export async function extractPurchasesResilient(text,context=null,options={}) {
+ try{return await extractPurchases(text,context,options);}
+ catch(error){
+  if(error?.message==='purchase_input_limit')throw error;
+  const known=new Set(['purchase_ai_unavailable','purchase_ai_rate_limited','purchase_extraction_invalid']);
+  const code=known.has(error?.message)?error.message:'purchase_ai_unavailable';
+  console.warn(JSON.stringify({event:'purchase_ai_fallback',code}));
+  return extractPurchasesLocal(text,context,{now:options.now || new Date()});
+ }
 }
 const audioType=mime=>String(mime || '').toLowerCase().split(';')[0].trim();
 export function validateAudioMetadata(message) {

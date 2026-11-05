@@ -13,7 +13,6 @@ import { whatsappOutbound } from '../lib/outbound-message.mjs';
 import { resetPairingIfRequested, needsFreshPairing, qrRenewalStalled, removeSessionArtifacts } from './pairing-reset.mjs';
 import { applySessionFingerprint, sessionFingerprint } from './session-fingerprint.mjs';
 import { VolumeAuth, SESSION_CLIENT_ID } from './volume-auth.mjs';
-import { createWaterReplies, callbackConfig, WATER_OPTIONS, WATER_QUESTION } from './water-replies.mjs';
 import { serializedId, installSerializedIdCompatibility } from './serialized-id-compat.mjs';
 import {createMessageReplacement,revokeBotMessage} from './message-replacement.mjs';
 import {createAgentChannel} from './agent-channel.mjs';
@@ -80,28 +79,15 @@ async function deliver(job) {
       await replacements.begin(job,address);
       const sentIds=[];
       sending = true;
-      const water = job.water_prompt && callbackConfig();
-      // Keep the full original reminder. The following single-choice poll is its input control.
-      let reminder;
-      if (water) {
-        reminder = await Promise.race([
-          client.sendMessage(address, `${whatsappOutbound(job)}\n\nEscolha o volume na enquete abaixo ou responda a esta mensagem com os ml.`, {linkPreview:false,waitUntilMsgSent:true}),
-          new Promise((_, reject) => { sendTimer=setTimeout(()=>reject(new Error('send_timeout')),30000); })
-        ]);
-        clearTimeout(sendTimer);
-        if (!serializedId(reminder?.id)) throw new Error('water_binding_failed');
-        sentIds.push(serializedId(reminder.id));
-        await repo.bindWater(worker,job.id,address,serializedId(reminder.id));
-      }
       const message = await Promise.race([
-        client.sendMessage(address, water ? new Poll(WATER_QUESTION, WATER_OPTIONS, {allowMultipleAnswers:false}) : whatsappOutbound(job), { linkPreview: false,waitUntilMsgSent:true }),
+        client.sendMessage(address, whatsappOutbound(job), { linkPreview: false,waitUntilMsgSent:true }),
         new Promise((_, reject) => { sendTimer = setTimeout(() => reject(new Error('send_timeout')), 30000); })
       ]);
       // 'sent' significa aceito pela biblioteca; nao significa lido ou entregue no celular.
       if (!serializedId(message?.id)) throw new Error('send_missing_message_id');
       sentIds.push(serializedId(message.id));
       if(job.event_type==='agent.notice')await agentChannel.bind(job,recipient,address,serializedId(message.id));
-      await replacements.complete(job,address,sentIds,water?2:1);
+      await replacements.complete(job,address,sentIds,1);
     });
   } catch (error) {
     const code = sending ? sendDiagnostic(error) : ['group_unavailable', 'group_read_only', 'group_lookup_timeout', 'number_not_registered'].includes(error.message) ? error.message : 'lookup_failed';
@@ -155,16 +141,15 @@ async function run() {
     puppeteer: { headless: true, ...(process.env.PUPPETEER_EXECUTABLE_PATH ? { executablePath: process.env.PUPPETEER_EXECUTABLE_PATH } : {}), args: ['--disable-dev-shm-usage'] } });
   let qrGeneration = 0;
   const safeEvent = action => (...args) => { action(...args).catch(() => close('state_write_failed').finally(() => process.exit(1))); };
-  const waterReplies=createWaterReplies({client,repo,worker,replacements});
   const purchases=createWhatsAppPurchases({client,repo,worker,Poll});
   agentChannel=createAgentChannel({client,repo,dataPath});
   const inbound=action => (...args) => { if (!ready || stopping) return; action(...args).catch(()=>console.error('inbound_processing_failed')); };
   client.on('vote_update',inbound(async vote=>{
     console.error(JSON.stringify({event:'vote_update_received',options:vote?.selectedOptions?.length || 0}));
-    await waterReplies.vote(vote);await purchases.vote(vote);
+    await purchases.vote(vote);
   }));
   // message_create includes own-account replies; authorization still requires its recipient registration.
-  client.on('message_create',inbound(async message=>{if(await agentChannel.message(message))return;await waterReplies.message(message);await purchases.message(message);}));
+  client.on('message_create',inbound(async message=>{if(await agentChannel.message(message))return;await purchases.message(message);}));
   async function noteGroupFailure(error) {
     const code = groupCatalogError(error);
     if (typeof repo.failGroupSync === 'function') await repo.failGroupSync(worker, code);
@@ -222,7 +207,6 @@ async function run() {
   await client.initialize();
   let cleanedAt = 0;
   let deletionsAt = 0;
-  let waterReconcileAt = 0;
   let purchaseReconcileAt = 0;
   while (!stopping) {
     if (Date.now() - cleanedAt > 3600000) { await repo.cleanup(); try{await agentChannel.cleanup();}catch{console.error('agent_channel_cleanup_failed');} cleanedAt = Date.now(); }
@@ -232,11 +216,6 @@ async function run() {
       if(Date.now()-deletionsAt>30000) {
         deletionsAt=Date.now();
         try {await replacements.cleanup();} catch {console.error('replacement_cleanup_failed');}
-      }
-      // Business/@lid: vote_update às vezes não chega; reconcilia votos já gravados no WhatsApp.
-      if(Date.now()-waterReconcileAt>20000) {
-        waterReconcileAt=Date.now();
-        try {await waterReplies.reconcile();} catch {console.error('water_vote_reconcile_failed');}
       }
       const job = await repo.claim(worker);
       if (job) {

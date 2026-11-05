@@ -3,7 +3,7 @@ import {serializedId} from './serialized-id-compat.mjs';
 import {metadataLookup} from './group-target.mjs';
 import {interactionRecipient,interactionVersion} from '../lib/domain.mjs';
 import {brazilDate,parseWaterAmount,actorPhone} from './water-replies.mjs';
-import {extractPurchases,transcribePurchaseAudio,validateAudioMetadata,validatePurchaseExtraction,MAX_AUDIO_BYTES} from './purchase-groq.mjs';
+import {extractPurchasesResilient,transcribePurchaseAudio,validateAudioMetadata,validatePurchaseExtraction,MAX_AUDIO_BYTES} from './purchase-groq.mjs';
 import {downloadPurchaseAudio} from './audio-media.mjs';
 
 const TTL=15*60*1000,DAY=24*60*60*1000;
@@ -17,7 +17,7 @@ export function purchaseConfig(env=process.env) {
   const origin=new URL(env.SUPERAPP_API_ORIGIN),token=String(env.WHATSAPP_PURCHASE_CALLBACK_TOKEN || '').trim();
   const phone=String(env.WHATSAPP_PURCHASE_OWNER_PHONE || '').trim();
   // Telefone opcional: a sessão WhatsApp / remetente real define o número. Env legado ainda é aceito se válido.
-  if(origin.protocol!=='https:' || origin.username || origin.password || token.length<32 || /[\r\n]/.test(token) || !env.GROQ_API_KEY)return null;
+  if(origin.protocol!=='https:' || origin.username || origin.password || token.length<32 || /[\r\n]/.test(token))return null;
   if(phone && !/^\+[1-9]\d{7,14}$/.test(phone))return null;
   return {phone:phone || null,token,url:new URL('/api/financeiro?resource=whatsapp-purchases',origin.origin).href};
  }catch{return null;}
@@ -54,7 +54,7 @@ export async function recordWhatsAppPurchase(draft,{env=process.env,fetcher=fetc
  return result;
 }
 
-function createPurchaseSession({client,repo,worker,env=process.env,scope,authorize,Poll,extract=extractPurchases,transcribe=transcribePurchaseAudio,record=recordWhatsAppPurchase,now=()=>Date.now(),send=(address,content)=>client.sendMessage(address,content,{linkPreview:false,waitUntilMsgSent:true})}) {
+function createPurchaseSession({client,repo,worker,env=process.env,scope,authorize,Poll,extract=extractPurchasesResilient,transcribe=transcribePurchaseAudio,record=recordWhatsAppPurchase,now=()=>Date.now(),send=(address,content)=>client.sendMessage(address,content,{linkPreview:false,waitUntilMsgSent:true})}) {
  let tail=Promise.resolve(),queued=0;
  const config=purchaseConfig(env);
  if(!config?.phone)throw new Error('purchase_disabled');
