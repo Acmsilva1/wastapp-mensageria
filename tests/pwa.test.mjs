@@ -84,7 +84,7 @@ test('servidor demo entrega rotas PWA e nao permite enviar mensagens reais', asy
     child.once('exit', code => { clearTimeout(timeout); reject(new Error(`Demo exited ${code}`)); });
   });
   const base = `http://127.0.0.1:${port}`;
-  for (const path of ['/', '/manifest.webmanifest', '/sw.js', '/pwa.js', '/pwa.css', '/ui.js', '/ui.css', '/visual.css', '/offline.html', '/pwa-offline.css', '/icons/icon-180.png', '/icons/icon-192.png', '/icons/icon-512.png']) {
+  for (const path of ['/ui/atoms/dom.mjs', '/ui/molecules/message.mjs', '/ui/organisms/feedback.mjs', '/', '/manifest.webmanifest', '/sw.js', '/pwa.js', '/pwa.css', '/ui.js', '/ui.css', '/visual.css', '/offline.html', '/pwa-offline.css', '/icons/icon-180.png', '/icons/icon-192.png', '/icons/icon-512.png']) {
     const response = await fetch(base + path);
     assert.equal(response.status, 200, path);
     assert.equal(response.headers.get('cache-control'), 'no-store', path);

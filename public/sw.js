@@ -1,4 +1,4 @@
-const CACHE = 'mensageria-static-e89cfe9af786906c';
+const CACHE = 'mensageria-static-877e932006db6a93';
 const ASSETS = ['/offline.html','/pwa-offline.css','/icons/icon-192.png','/icons/icon-512.png'];
 self.addEventListener('install', event => event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS))));
 self.addEventListener('activate', event => event.waitUntil((async () => {

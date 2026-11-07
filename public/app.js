@@ -1,3 +1,4 @@
+import './ui.js';
 const $ = selector => document.querySelector(selector);
 const messages = {
   agent_channel_unavailable: 'O canal de projetos requer a mensageria no modo volume da VPS.',

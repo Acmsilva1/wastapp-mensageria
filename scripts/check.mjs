@@ -7,6 +7,10 @@ for (const root of roots) for (const file of await readdir(root)) {
   const result = spawnSync(process.execPath, ['--check', `${root}/${file}`], { stdio: 'inherit' });
   if (result.status) process.exit(result.status || 1);
 }
+for (const file of ['atoms/dom.mjs','molecules/message.mjs','organisms/feedback.mjs']) {
+  const result = spawnSync(process.execPath, ['--check', `public/ui/${file}`], { stdio: 'inherit' });
+  if (result.status) process.exit(result.status || 1);
+}
 const config = JSON.parse((await readFile('vercel.json', 'utf8')).replace(/^\uFEFF/, ''));
 if (config.daemons.whatsapp.instances.iad1 !== 1 || config.outputDirectory !== 'public') throw new Error('Invalid deployment layout');
 
