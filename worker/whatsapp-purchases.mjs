@@ -181,6 +181,22 @@ function createPurchaseSession({client,repo,worker,env=process.env,scope,authori
    }
    if(!/pix|d[eé]bito|cr[eé]dito|gast(?:ei|o|ou|amos)|pagu(?:ei|ou)|pagamento|comprei|compra|cust(?:ou|aram)|desembols(?:ei|o)|saiu|sairam|saíram|ficou|deu|despesa|registr|anot|reais|r\$|\p{L}.*\d|\d.*\p{L}/iu.test(text)) {
     if(replaceable && await reserve(id)){await cancel(draft,address);return true;}
+    const greetingOrHelp = /^(?:oi|ol[aá]|bom dia|boa tarde|boa noite|e a[ií]|opa|fala|tudo bem|tudo bom|quem [eé] voc[eê]|como funciona|o que voc[eê] faz|ajuda|help|menu|comandos?)[!?.\s]*$/i;
+    if(greetingOrHelp.test(normalize(text))) {
+     if(await reserve(id)) {
+      await outbound(address,'Olá! Sou o assistente do Super App. 🦉✨\n\nPosso te ajudar com o seu dia a dia:\n• 🧾 *Registro de Despesas:* Me diga o que comprou (ex: "Almoço 25 reais no Pix" ou "Farmácia 40 no débito") ou envie um áudio.\n• 💧 *Lembretes de Água:* Registre seu consumo (ex: "bebi 300 ml" ou vote na enquete).\n• 📋 *Compras Pendentes:* Envie "pendente" para rever ou confirmar compras em aberto.\n\nComo posso te ajudar agora?');
+      return true;
+     }
+     return true;
+    }
+    const thanksOrAck = /^(?:obrigad[oa]|valeu|show|beleza|perfeito|maravilha|legal|combinado|agradecid[oa])[!?.\s]*$/i;
+    if(thanksOrAck.test(normalize(text))) {
+     if(await reserve(id)) {
+      await outbound(address,'Por nada! Qualquer gasto ou consumo de água que quiser registrar, só me chamar por aqui. 🦉✨');
+      return true;
+     }
+     return true;
+    }
     return false;
    }
   }

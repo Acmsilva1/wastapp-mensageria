@@ -137,8 +137,27 @@ async function run() {
     } catch { close('pairing_control_failed').finally(() => process.exit(1)); }
     finally { checkingPairing = false; }
   }, 3000);
+  const chromiumArgs = [
+    '--disable-dev-shm-usage',
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-accelerated-2d-canvas',
+    '--no-first-run',
+    '--no-zygote',
+    '--disable-gpu',
+    '--mute-audio',
+    '--disable-extensions',
+    '--disable-component-extensions-with-background-pages',
+    '--disable-default-apps',
+    '--disable-background-networking',
+    '--disable-background-timer-throttling',
+    '--disable-backgrounding-occluded-windows',
+    '--disable-breakpad',
+    '--disable-features=Translate,BackForwardCache,AcceptCHFrame,MediaRouter,OptimizationHints,OnDeviceModelService',
+    '--js-flags=--max-old-space-size=384'
+  ];
   client = new Client({ qrMaxRetries: 0, authStrategy: new VolumeAuth({ clientId: SESSION_CLIENT_ID, dataPath }),
-    puppeteer: { headless: true, ...(process.env.PUPPETEER_EXECUTABLE_PATH ? { executablePath: process.env.PUPPETEER_EXECUTABLE_PATH } : {}), args: ['--disable-dev-shm-usage'] } });
+    puppeteer: { headless: true, ...(process.env.PUPPETEER_EXECUTABLE_PATH ? { executablePath: process.env.PUPPETEER_EXECUTABLE_PATH } : {}), args: chromiumArgs } });
   let qrGeneration = 0;
   const safeEvent = action => (...args) => { action(...args).catch(() => close('state_write_failed').finally(() => process.exit(1))); };
   const purchases=createWhatsAppPurchases({client,repo,worker,Poll});
