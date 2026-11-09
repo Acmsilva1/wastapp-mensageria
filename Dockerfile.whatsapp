@@ -4,8 +4,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends chromium ca-cer
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --no-audit --no-fund
+COPY scripts ./scripts
 COPY lib ./lib
 COPY worker ./worker
+# Patch whatsapp-web.js: corrige race condition WAWebSocketModel.Socket null
+RUN node scripts/patch-whatsapp-web.mjs
 RUN mkdir -p /app/.runtime/whatsapp && chown -R node:node /app
 # Volume da sessao. O boot nao apaga este diretorio.
 VOLUME ["/app/.runtime/whatsapp"]
