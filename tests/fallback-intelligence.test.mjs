@@ -23,6 +23,18 @@ test('água cai em escolha Node determinística quando Groq falta, falha ou resp
  assert.equal(failed,noKey);assert.equal(invalid,noKey);assert.match(noKey,/💧/);
 });
 
+test('lembretes de água variam opções e integram progresso',async()=>{
+ const withProgress={...job,message:'💧 Hora de beber água!\nMeta: 2000 ml\nJá registradas: 600 / 2000 ml\nFaltam 1400 ml para a meta.'};
+ const text=await waterOutbound(withProgress,{env:{}});
+ assert.match(text,/600 de 2000 ml/);
+ // Variação em diferentes horários mesmo sem IA
+ const morning=await waterOutbound({...job,idempotency_key:'agua:2026-11-04:09:00:1'},{env:{}});
+ const afternoon=await waterOutbound({...job,idempotency_key:'agua:2026-11-04:15:00:1'},{env:{}});
+ assert.match(morning,/💧/);
+ assert.match(afternoon,/💧/);
+ assert.notEqual(morning,afternoon);
+});
+
 test('parser Node interpreta compra simples, valor por extenso e correção com contexto',()=>{
  let result=extractPurchasesLocal('Gastei R$ 35,50 na padaria',null,{now});
  assert.deepEqual(result.items,[{description:'Padaria',amount_cents:3550,payment:'debito_pix'}]);

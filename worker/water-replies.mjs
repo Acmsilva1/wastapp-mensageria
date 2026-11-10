@@ -61,7 +61,27 @@ export async function actorPhone(client, actor) {
   return /^\d{8,15}@c\.us$/.test(pn || '') ? `+${pn.split('@')[0]}` : null;
 }
 export function confirmation(result) {
-  return `✅ ${result.duplicate ? 'Este lembrete já foi registrado' : `Registro realizado: ${result.amount_ml} ml`} — ${String(result.profile_name).slice(0,80)}.\n💧 Hoje: ${result.realizado_ml} / ${result.meta_ml} ml.\n${result.remaining_ml>0 ? `Faltam ${result.remaining_ml} ml para sua meta diária.` : '🎯 Meta diária atingida!'}`;
+  const name = String(result.profile_name || 'você').slice(0, 80);
+  if (result.duplicate) {
+    return `✅ Este lembrete já foi registrado — ${name}.\n💧 Hoje: ${result.realizado_ml} / ${result.meta_ml} ml.\n${result.remaining_ml > 0 ? `Faltam ${result.remaining_ml} ml para sua meta diária.` : '🎯 Meta diária atingida!'}`;
+  }
+  const greetings = [
+    `💧 Boa, ${name}! Registro realizado: ${result.amount_ml} ml.`,
+    `✅ Mais ${result.amount_ml} ml pra conta! Registro realizado: ${result.amount_ml} ml — ${name}.`,
+    `🦉✨ Hidratação atualizada! Registro realizado: ${result.amount_ml} ml — ${name}.`,
+    `👏 Show de bola, ${name}! Registro realizado: ${result.amount_ml} ml.`,
+    `💪 Mandou bem! Registro realizado: ${result.amount_ml} ml — ${name}.`,
+    `🌿 Pausa bem aproveitada! Registro realizado: ${result.amount_ml} ml — ${name}.`,
+    `🥤 Garrafinha em ação! Registro realizado: ${result.amount_ml} ml — ${name}.`,
+    `✨ Cuidado em dia! Registro realizado: ${result.amount_ml} ml — ${name}.`
+  ];
+  const idx = Math.abs(Number(result.amount_ml || 0) + Number(result.realizado_ml || 0)) % greetings.length;
+  const header = greetings[idx];
+  const progressLine = `💧 Hoje: ${result.realizado_ml} / ${result.meta_ml} ml.`;
+  const statusLine = result.remaining_ml > 0
+    ? `Faltam ${result.remaining_ml} ml para sua meta diária.`
+    : '🎯 Meta diária atingida! Mandou muito bem hoje! 🏆';
+  return `${header}\n${progressLine}\n${statusLine}`;
 }
 export function callbackConfig(env=process.env) {
   try {
